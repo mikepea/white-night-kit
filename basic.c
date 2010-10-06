@@ -3,6 +3,8 @@
 #include <avr/sleep.h>          // definitions for power-down modes
 #include <avr/pgmspace.h>       // definitions or keeping constants in program memory
 
+some crap
+
 int main(void)
 {
   // Set Port B pins as all outputs
