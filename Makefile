@@ -347,8 +347,6 @@ clean_list :
 
 	$(REMOVE) *.obj
 
-	$(REMOVE) *.c
-
 	$(REMOVE) *.elf
 
 	$(REMOVE) *.o
