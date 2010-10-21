@@ -65,7 +65,7 @@ int main(void) {
         
         PORTB ^= irOut;
         PORTB ^= redMask;
-        delay_x_us(26); // 17 works
+        delay_x_us(26000); // 17 works
         
     }
 }

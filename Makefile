@@ -17,6 +17,8 @@ all: 	begin gccversion \
 program-rgb: rgb.hex
 program-rps: rock-paper-scissors.hex
 program-basic: basic.hex
+program-rgb: 38khz_pwm_code.hex
+program-white_night_code: white_night_code.hex
 
 # this is necessary if you're burning the AVR for the first time...
 # sets the proper fuse for 8MHz internal oscillator with no clk div
