@@ -26,9 +26,9 @@
 #define irInPortBPin  4
 
 // The length of tocks to wait to get a 38KHz signal
-//#define IR_PULSE_DELAY  26
+#define IR_PULSE_DELAY  26
 // for debugging, extend delay to be visible on RGB led:
-#define IR_PULSE_DELAY  10000
+//#define IR_PULSE_DELAY  10000
 
 // number of 38Khz pulses in a given period
 #define NEC_NUM_PULSES_4500US  176
@@ -90,28 +90,40 @@ void startUp1(void) {
 
 void send_38khz_pulse(void) {
     PORTB ^= irOutMask;
+#ifdef DEBUG
     PORTB ^= redMask;
+#endif
     delay_x_us(IR_PULSE_DELAY);
     PORTB ^= irOutMask;
+#ifdef DEBUG
     PORTB ^= redMask;
+#endif
     delay_x_us(IR_PULSE_DELAY);
 }
 
 void send_38khz_space(void) {
     PORTB ^= bogusMask;
+#ifdef DEBUG
     PORTB ^= bluMask;
+#endif
     delay_x_us(IR_PULSE_DELAY);
     PORTB ^= bogusMask;
+#ifdef DEBUG
     PORTB ^= bluMask;
+#endif
     delay_x_us(IR_PULSE_DELAY);
 }
 
 void send_38khz_green_space(void) {
     PORTB ^= bogusMask;
+#ifdef DEBUG
     PORTB ^= grnMask;
+#endif
     delay_x_us(IR_PULSE_DELAY);
     PORTB ^= bogusMask;
+#ifdef DEBUG
     PORTB ^= grnMask;
+#endif
     delay_x_us(IR_PULSE_DELAY);
 }
 
@@ -215,6 +227,35 @@ irparams_t;
 
 volatile irparams_t irparams;
 
+// initialization
+void enableIRIn() {
+  // setup pulse clock timer interrupt
+  //TCCR1A = 0;  // normal mode
+
+  //Prescale /8 (16M/8 = 0.5 microseconds per tick)
+  // Therefore, the timer interval can range from 0.5 to 128 microseconds
+  // depending on the reset value (255 to 0)
+  //cbi(TCCR1B,CS12);
+  //sbi(TCCR1B,CS11);
+  //cbi(TCCR1B,CS10);
+
+  //Timer1 Overflow Interrupt Enable
+  //sbi(TIMSK1,TOIE2);
+
+  RESET_TIMER1;
+
+  //sei();  // enable interrupts
+
+  // initialize state machine variables
+  irparams.rcvstate = STATE_IDLE;
+  irparams.rawlen = 0;
+  irparams.blinkflag = 1;
+
+  // set pin modes
+  //pinMode(irparams.recvpin, INPUT);
+}
+
+
 // TIMER2 interrupt code to collect raw data.
 // Widths of alternating SPACE, MARK are recorded in rawbuf.
 // Recorded in ticks of 50 microseconds.
@@ -284,12 +325,13 @@ ISR(PCINT0_vect) {
 
   if (irparams.blinkflag) {
     if (irdata == MARK) {
-      PORTB |= redMask;  // on
+      PORTB ^= redMask; delay_ten_us(1); PORTB ^= redMask;
     } 
     else {
-      PORTB &= redMask;  // off
+      PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     }
   }
+
 
 }
 
@@ -319,7 +361,7 @@ int main(void) {
     PORTB = 0xFF;   // all PORTB output pins High (all LEDs off) 
                     // -- (if we set an input pin High it activates a 
                     // pull-up resistor, which we don't need, but don't care about either)
-
+                    
     // set up PB3 so that a logic change causes an interrupt 
     // (this will happen when the IR detector goes from seeing 
     // IR to not seeing IR, or from not seeing IR to seeing IR)
@@ -329,9 +371,14 @@ int main(void) {
     // pretty boot light sequence.
     startUp1();
 
+    enableIRIn();
     sei();                // enable microcontroller interrupts
 
     while (1==1) {
+
+        PORTB ^= grnMask;
+        delay_ten_us(1);
+        PORTB ^= grnMask;
 
         // turn off interrupts on our IR sensor
         PCMSK = 0b00000000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
@@ -344,12 +391,12 @@ int main(void) {
 
         // send patterns, wait for a second.
 
-
-
+#ifdef DEBUG
         // debugging
         PORTB ^= grnMask;
         delay_ten_us(10000);
         PORTB ^= grnMask;
+#endif
 
         delay_ten_us(100000);
 
