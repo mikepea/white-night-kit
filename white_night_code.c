@@ -9,19 +9,21 @@
 #include <avr/pgmspace.h>
 
 // for matt's design
-//#define redMask  0b00000010;
-//#define grnMask  0b00010000;
-//#define bluMask  0b00000100;
-//#define irIn     0b00000000;
-//#define irOut    0b00000001;
+//#define redMask  0b00000010
+//#define grnMask  0b00010000
+//#define bluMask  0b00000100
+//#define irInMask     0b00001000
+//#define irOutMask    0b00000001
+//#define irInPortBPin  4;
 
 // for trippy RGB wave
-#define bogusMask 0b00100000;
-#define redMask  0b00000010;
-#define grnMask  0b00000100;
-#define bluMask  0b00010000;
-#define irIn     0b00000000;
-#define irOut    0b00000001;
+#define bogusMask 0b00100000
+#define redMask  0b00000010
+#define grnMask  0b00000100
+#define bluMask  0b00010000
+#define irInMask     0b00001000
+#define irOutMask    0b00000001
+#define irInPortBPin  4
 
 // The length of tocks to wait to get a 38KHz signal
 //#define IR_PULSE_DELAY  26
@@ -87,10 +89,10 @@ void startUp1(void) {
 }
 
 void send_38khz_pulse(void) {
-    PORTB ^= irOut;
+    PORTB ^= irOutMask;
     PORTB ^= redMask;
     delay_x_us(IR_PULSE_DELAY);
-    PORTB ^= irOut;
+    PORTB ^= irOutMask;
     PORTB ^= redMask;
     delay_x_us(IR_PULSE_DELAY);
 }
@@ -165,30 +167,186 @@ void send_nec_byte(char data) {
     //space(0);
 }
 
-void send_nec_ir_code(char id, char code) {
+void send_nec_ir_code(char address, char command) {
     send_nec_header();
-    send_nec_byte(id);
-    send_nec_byte(code);
-    send_nec_byte(~id);
-    send_nec_byte(~code);
+    send_nec_byte(address);
+    send_nec_byte(~address);
+    send_nec_byte(command);
+    send_nec_byte(~command);
 }
 
 void send_my_ir_code(char id, char code) {
     send_nec_ir_code(id, code);
 }
 
+// receiver state machine states
+#define STATE_IDLE     2
+#define STATE_MARK     3
+#define STATE_SPACE    4
+#define STATE_STOP     5
+
+#define INIT_TIMER_COUNT1 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
+#define RESET_TIMER1 TCNT1 = INIT_TIMER_COUNT1
+#define CLKFUDGE 5        // fudge factor for clock interrupt overhead
+#define CLK 256           // max value for clock (timer 2)
+#define PRESCALE 8        // timer2 clock prescale
+#define SYSCLOCK 8000000  // main clock speed
+#define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
+#define _GAP 5000 // Minimum gap between transmissions
+#define GAP_TICKS (_GAP/USECPERTICK)
+
+#define USECPERTICK 50  // microseconds per clock interrupt tick
+#define RAWBUF 76 // Length of raw duration buffer
+
+// Marks tend to be 100us too long, and spaces 100us too short
+// when received due to sensor lag.
+#define MARK_EXCESS 100
+
+// information for the interrupt handler
+typedef struct {
+  uint8_t recvpin;           // pin for IR data from detector
+  uint8_t rcvstate;          // state machine
+  uint8_t blinkflag;         // TRUE to enable blinking of pin on IR processing
+  unsigned int timer;        // state timer, counts 50uS ticks.
+  unsigned int rawbuf[RAWBUF]; // raw data
+  uint8_t rawlen;            // counter of entries in rawbuf
+} 
+irparams_t;
+
+volatile irparams_t irparams;
+
+// TIMER2 interrupt code to collect raw data.
+// Widths of alternating SPACE, MARK are recorded in rawbuf.
+// Recorded in ticks of 50 microseconds.
+// rawlen counts the number of entries recorded so far.
+// First entry is the SPACE between transmissions.
+// As soon as a SPACE gets long, ready is set, state switches to IDLE, timing of SPACE continues.
+// As soon as first MARK arrives, gap width is recorded, ready is cleared, and new logging starts
+ISR(PCINT0_vect) {
+
+  RESET_TIMER1;
+
+  unsigned char irdata = (PINB & irInMask) >> (irInPortBPin - 1);
+
+  irparams.timer++; // One more 50us tick
+  if (irparams.rawlen >= RAWBUF) {
+    // Buffer overflow
+    irparams.rcvstate = STATE_STOP;
+  }
+
+  switch(irparams.rcvstate) {
+  case STATE_IDLE: // In the middle of a gap
+    if (irdata == MARK) {
+      if (irparams.timer < GAP_TICKS) {
+        // Not big enough to be a gap.
+        irparams.timer = 0;
+      } else {
+        // gap just ended, record duration and start recording transmission
+        irparams.rawlen = 0;
+        irparams.rawbuf[irparams.rawlen++] = irparams.timer;
+        irparams.timer = 0;
+        irparams.rcvstate = STATE_MARK;
+      }
+    }
+    break;
+
+  case STATE_MARK: // timing MARK
+    if (irdata == SPACE) {   // MARK ended, record time
+      irparams.rawbuf[irparams.rawlen++] = irparams.timer;
+      irparams.timer = 0;
+      irparams.rcvstate = STATE_SPACE;
+    }
+    break;
+
+  case STATE_SPACE: // timing SPACE
+    if (irdata == MARK) { // SPACE just ended, record it
+      irparams.rawbuf[irparams.rawlen++] = irparams.timer;
+      irparams.timer = 0;
+      irparams.rcvstate = STATE_MARK;
+    } 
+    else { // SPACE
+      if (irparams.timer > GAP_TICKS) {
+        // big SPACE, indicates gap between codes
+        // Mark current code as ready for processing
+        // Switch to STOP
+        // Don't reset timer; keep counting space width
+        irparams.rcvstate = STATE_STOP;
+      } 
+    }
+    break;
+
+  case STATE_STOP: // waiting, measuring gap
+    if (irdata == MARK) { // reset gap timer
+      irparams.timer = 0;
+    }
+    break;
+  }
+
+  if (irparams.blinkflag) {
+    if (irdata == MARK) {
+      PORTB |= redMask;  // on
+    } 
+    else {
+      PORTB &= redMask;  // off
+    }
+  }
+
+}
+
+
 int main(void) {
+
     TCCR0A = 0;
     TCCR0B = 0;
-    DDRB = 0b00010111;
     PORTB = 0xff; // write all outputs high & internal resistors on inputs (turns led's off)
+    
+    // disable the Watch Dog Timer (since we won't be using it, this will save battery power)
+    MCUSR = 0b00000000;   // first step:   WDRF=0 (Watch Dog Reset Flag)
+    WDTCR = 0b00011000;   // second step:  WDCE=1 and WDE=1 (Watch Dog Change Enable and Watch Dog Enable)
+    WDTCR = 0b00000000;   // third step:   WDE=0
+    // turn off power to the USI and ADC modules (since we won't be using it, this will save battery power)
+    PRR = 0b00000011;
+    // disable all Timer interrupts
+    TIMSK = 0x00;         // setting a bit to 0 disables interrupts
+    // set up the input and output pins (the ATtiny25 only has PORTB pins)
+    DDRB = 0b00010111;  // setting a bit to 1 makes it an output, setting a bit to 0 makes it an input
+                        //   PB5 (unused) is input
+                        //   PB4 (Blue LED) is output
+                        //   PB3 (IR detect) is input
+                        //   PB2 (Green LED) is output
+                        //   PB1 (Red LED) is output
+                        //   PB0 (IR LED) is output
+    PORTB = 0xFF;   // all PORTB output pins High (all LEDs off) 
+                    // -- (if we set an input pin High it activates a 
+                    // pull-up resistor, which we don't need, but don't care about either)
 
+    // set up PB3 so that a logic change causes an interrupt 
+    // (this will happen when the IR detector goes from seeing 
+    // IR to not seeing IR, or from not seeing IR to seeing IR)
+    GIMSK = 0b00100000;   // PCIE=1 to enable Pin Change Interrupts
+    PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+
+    // pretty boot light sequence.
     startUp1();
+
+    sei();                // enable microcontroller interrupts
 
     while (1==1) {
 
-        send_my_ir_code(0x8d, 0x23);
+        // turn off interrupts on our IR sensor
+        PCMSK = 0b00000000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
 
+        // transmit our identity
+        send_my_ir_code(0x8d, 0x23);
+ 
+        // turn on interrupts on our IR sensor
+        PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+
+        // send patterns, wait for a second.
+
+
+
+        // debugging
         PORTB ^= grnMask;
         delay_ten_us(10000);
         PORTB ^= grnMask;
@@ -196,6 +354,7 @@ int main(void) {
         delay_ten_us(100000);
 
     }
+    return 0;
 
 }
 
