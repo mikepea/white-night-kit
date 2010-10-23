@@ -222,6 +222,16 @@ irparams_t;
 
 volatile irparams_t irparams;
 
+void enable_interrupts(void) {
+  //Timer0 Overflow Interrupt Enable
+  TIMSK |= _BV(TOIE0);
+}
+
+void disable_interrupts(void) {
+  //Timer0 Overflow Interrupt disable
+  TIMSK &= ~(_BV(TOIE0));
+}
+
 // initialization
 void enableIRIn() {
   // setup pulse clock timer interrupt
@@ -389,8 +399,10 @@ int main(void) {
         delay_ten_us(10000);
         PORTB ^= bluMask;
 
-        // transmit our identity
+        // transmit our identity, without interruption
+        disable_interrupts();
         send_my_ir_code(0x8d, 0x23);
+        enable_interrupts();
  
         // turn on interrupts on our IR sensor
         //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
