@@ -247,7 +247,7 @@ void enableIRIn() {
   // initialize state machine variables
   irparams.rcvstate = STATE_IDLE;
   irparams.rawlen = 0;
-  irparams.blinkflag = 0;
+  irparams.blinkflag = 1;
 
   // set pin modes
   //pinMode(irparams.recvpin, INPUT);
