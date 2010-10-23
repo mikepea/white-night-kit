@@ -73,18 +73,13 @@ void delay_x_us(unsigned long int x) {
 // Little start up pattern
 void startUp1(void) {
     for (int i = 0; i<15; i++) {
-        PORTB ^= redMask;
-        delay_ten_us(1600-(i*100));
-        PORTB ^= redMask;
-        delay_ten_us(1600-(i*100));
-        PORTB ^= grnMask;
-        delay_ten_us(1600-(i*100));
         PORTB ^= grnMask;
         delay_ten_us(1600-(i*100));
         PORTB ^= bluMask;
         delay_ten_us(1600-(i*100));
         PORTB ^= bluMask;
         delay_ten_us(1600-(i*100));
+        PORTB ^= grnMask;
     }
 }
 
@@ -197,8 +192,8 @@ void send_my_ir_code(char id, char code) {
 #define STATE_SPACE    4
 #define STATE_STOP     5
 
-#define INIT_TIMER_COUNT1 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
-#define RESET_TIMER1 TCNT1 = INIT_TIMER_COUNT1
+#define INIT_TIMER_COUNT0 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
+#define RESET_TIMER0 TCNT0 = INIT_TIMER_COUNT0
 #define CLKFUDGE 5        // fudge factor for clock interrupt overhead
 #define CLK 256           // max value for clock (timer 2)
 #define PRESCALE 8        // timer2 clock prescale
@@ -230,43 +225,48 @@ volatile irparams_t irparams;
 // initialization
 void enableIRIn() {
   // setup pulse clock timer interrupt
-  //TCCR1A = 0;  // normal mode
+  TCCR0A = 0;  // normal mode
 
-  //Prescale /8 (16M/8 = 0.5 microseconds per tick)
-  // Therefore, the timer interval can range from 0.5 to 128 microseconds
+  //Prescale /8 (8M/8 = 1 microseconds per tick)
+  // Therefore, the timer interval can range from 1 to 256 microseconds
   // depending on the reset value (255 to 0)
-  //cbi(TCCR1B,CS12);
-  //sbi(TCCR1B,CS11);
-  //cbi(TCCR1B,CS10);
+  //cbi(TCCR0B,CS02);
+  TCCR0B &= ~(_BV(CS02));
+  //sbi(TCCR0B,CS01);
+  TCCR0B |= _BV(CS01);
+  //cbi(TCCR0B,CS00);
+  TCCR0B &= ~(_BV(CS00));
 
-  //Timer1 Overflow Interrupt Enable
-  //sbi(TIMSK1,TOIE2);
+  //Timer0 Overflow Interrupt Enable
+  TIMSK |= _BV(TOIE0);
 
-  RESET_TIMER1;
+  RESET_TIMER0;
 
   //sei();  // enable interrupts
 
   // initialize state machine variables
   irparams.rcvstate = STATE_IDLE;
   irparams.rawlen = 0;
-  irparams.blinkflag = 1;
+  irparams.blinkflag = 0;
 
   // set pin modes
   //pinMode(irparams.recvpin, INPUT);
 }
 
+ISR(PCINT0_vect) {
+}
 
-// TIMER2 interrupt code to collect raw data.
+// TIMER0 interrupt code to collect raw data.
 // Widths of alternating SPACE, MARK are recorded in rawbuf.
 // Recorded in ticks of 50 microseconds.
 // rawlen counts the number of entries recorded so far.
 // First entry is the SPACE between transmissions.
 // As soon as a SPACE gets long, ready is set, state switches to IDLE, timing of SPACE continues.
 // As soon as first MARK arrives, gap width is recorded, ready is cleared, and new logging starts
-ISR(PCINT0_vect) {
+ISR(TIMER0_OVF_vect) {
 
-  RESET_TIMER1;
-
+  RESET_TIMER0;
+  
   unsigned char irdata = (PINB & irInMask) >> (irInPortBPin - 1);
 
   irparams.timer++; // One more 50us tick
@@ -281,12 +281,14 @@ ISR(PCINT0_vect) {
       if (irparams.timer < GAP_TICKS) {
         // Not big enough to be a gap.
         irparams.timer = 0;
+        //PORTB ^= bluMask; 
       } else {
         // gap just ended, record duration and start recording transmission
         irparams.rawlen = 0;
         irparams.rawbuf[irparams.rawlen++] = irparams.timer;
         irparams.timer = 0;
         irparams.rcvstate = STATE_MARK;
+        //PORTB ^= grnMask; delay_ten_us(1000); PORTB ^= grnMask; 
       }
     }
     break;
@@ -343,13 +345,13 @@ int main(void) {
     PORTB = 0xff; // write all outputs high & internal resistors on inputs (turns led's off)
     
     // disable the Watch Dog Timer (since we won't be using it, this will save battery power)
-    MCUSR = 0b00000000;   // first step:   WDRF=0 (Watch Dog Reset Flag)
-    WDTCR = 0b00011000;   // second step:  WDCE=1 and WDE=1 (Watch Dog Change Enable and Watch Dog Enable)
-    WDTCR = 0b00000000;   // third step:   WDE=0
+    //MCUSR = 0b00000000;   // first step:   WDRF=0 (Watch Dog Reset Flag)
+    //WDTCR = 0b00011000;   // second step:  WDCE=1 and WDE=1 (Watch Dog Change Enable and Watch Dog Enable)
+    //WDTCR = 0b00000000;   // third step:   WDE=0
     // turn off power to the USI and ADC modules (since we won't be using it, this will save battery power)
-    PRR = 0b00000011;
+    //PRR = 0b00000011;
     // disable all Timer interrupts
-    TIMSK = 0x00;         // setting a bit to 0 disables interrupts
+    //TIMSK = 0x00;         // setting a bit to 0 disables interrupts
     // set up the input and output pins (the ATtiny25 only has PORTB pins)
     DDRB = 0b00010111;  // setting a bit to 1 makes it an output, setting a bit to 0 makes it an input
                         //   PB5 (unused) is input
@@ -365,8 +367,8 @@ int main(void) {
     // set up PB3 so that a logic change causes an interrupt 
     // (this will happen when the IR detector goes from seeing 
     // IR to not seeing IR, or from not seeing IR to seeing IR)
-    GIMSK = 0b00100000;   // PCIE=1 to enable Pin Change Interrupts
-    PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+    //GIMSK = 0b00100000;   // PCIE=1 to enable Pin Change Interrupts
+    //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
 
     // pretty boot light sequence.
     startUp1();
@@ -376,18 +378,22 @@ int main(void) {
 
     while (1==1) {
 
-        PORTB ^= grnMask;
-        delay_ten_us(1);
-        PORTB ^= grnMask;
-
         // turn off interrupts on our IR sensor
-        PCMSK = 0b00000000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+        //PCMSK = 0b00000000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+
+        // turn off RGB LED
+        //PORTB &= ~( redMask + bluMask + grnMask );
+        //PORTB &= 0b11101000;
+
+        PORTB ^= bluMask;
+        delay_ten_us(10000);
+        PORTB ^= bluMask;
 
         // transmit our identity
         send_my_ir_code(0x8d, 0x23);
  
         // turn on interrupts on our IR sensor
-        PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+        //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
 
         // send patterns, wait for a second.
 
