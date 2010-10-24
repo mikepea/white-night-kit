@@ -260,14 +260,80 @@ typedef struct {
 volatile irparams_t irparams;
 volatile decode_results my_results;
 
-void enable_interrupts(void) {
+void enable_ir_recving(void) {
   //Timer0 Overflow Interrupt Enable
   TIMSK |= _BV(TOIE0);
 }
 
-void disable_interrupts(void) {
+void disable_ir_recving(void) {
   //Timer0 Overflow Interrupt disable
   TIMSK &= ~(_BV(TOIE0));
+}
+
+void mark(int time) {
+  // Sends an IR mark for the specified number of microseconds.
+  // The mark output is modulated at the PWM frequency.
+  TCCR0A |= _BV(COM0B1); // Enable pin 3 PWM output
+  delay_x_us(time);
+}
+
+/* Leave pin off for time (given in microseconds) */
+void space(int time) {
+  // Sends an IR space for the specified number of microseconds.
+  // A space is no output, so the PWM output is disabled.
+  TCCR0A &= ~(_BV(COM0B1)); // Disable pin 3 PWM output
+  delay_x_us(time);
+}
+
+void enableIROut(int khz) {
+  // Enables IR output.  The khz value controls the modulation frequency in kilohertz.
+  // The IR output will be on pin 3 (OC0B).
+  // This routine is designed for 36-40KHz; if you use it for other values, it's up to you
+  // to make sure it gives reasonable results.  (Watch out for overflow / underflow / rounding.)
+  // TIMER0 is used in phase-correct PWM mode, with OCR0A controlling the frequency and OCR0B
+  // controlling the duty cycle.
+  // There is no prescaling, so the output frequency is 16MHz / (2 * OCR0A)
+  // To turn the output on and off, we leave the PWM running, but connect and disconnect the output pin.
+  // A few hours staring at the ATmega documentation and this will all make sense.
+  // See my Secrets of Arduino PWM at http://arcfn.com/2009/07/secrets-of-arduino-pwm.html for details.
+  
+  // Disable the Timer0 Interrupt (which is used for receiving IR)
+  TIMSK &= ~_BV(TOIE0); //Timer0 Overflow Interrupt
+  
+  // When not sending PWM, we want it low - TODO - do we? common annode...
+  PORTB &= ~(irOutMask);
+  
+  // COM2A = 00: disconnect OC2A
+  // COM2B = 00: disconnect OC2B; to send signal set to 10: OC2B non-inverted
+  // WGM2 = 101: phase-correct PWM with OCRA as top
+  // CS2 = 000: no prescaling
+  TCCR0A = _BV(WGM00);
+  TCCR0B = _BV(WGM02) | _BV(CS00);
+
+  // The top value for the timer.  The modulation frequency will be SYSCLOCK / 2 / OCR0A.
+  OCR0A = SYSCLOCK / 2 / khz / 1000;
+  OCR0B = OCR0A / 3; // 33% duty cycle
+
+}
+
+void sendNEC(unsigned long data, int nbits)
+{
+  enableIROut(38);
+  mark(NEC_HDR_MARK);
+  space(NEC_HDR_SPACE);
+  for (int i = 0; i < nbits; i++) {
+    if (data & TOPBIT) {
+      mark(NEC_BIT_MARK);
+      space(NEC_ONE_SPACE);
+    } 
+    else {
+      mark(NEC_BIT_MARK);
+      space(NEC_ZERO_SPACE);
+    }
+    data <<= 1;
+  }
+  mark(NEC_BIT_MARK);
+  space(0);
 }
 
 // initialization
@@ -494,47 +560,40 @@ int main(void) {
     enableIRIn();
     sei();                // enable microcontroller interrupts
 
+    long my_code = 0x530287ee; // apple macbook remote, send menu command
+
     while (1==1) {
 
-        // turn off interrupts on our IR sensor
-        //PCMSK = 0b00000000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+        for (int i=0; i<100000; i++) {
 
-        // turn off RGB LED
-        //PORTB &= ~( redMask + bluMask + grnMask );
-        //PORTB &= 0b11101000;
+            if ( i = 1 ) {
+                // transmit our identity, without interruption
+                // blink blue
+                disable_ir_recving();
+                PORTB ^= bluMask;
+                sendNEC(my_code, 32);
+                PORTB ^= bluMask;
+                enable_ir_recving();
+            }
 
-        PORTB ^= bluMask;
-        delay_ten_us(10000);
-        PORTB ^= bluMask;
+            if ( decode(&my_results) == DECODED ) {
+                //PORTB ^= grnMask;
+                //delay_ten_us(100);
+                //PORTB ^= grnMask;
+            }
 
-        // transmit our identity, without interruption
-        disable_interrupts();
-        send_my_ir_code(0x8d, 0x23);
-        enable_interrupts();
+            if ( my_results.decode_type == NEC ) {
+                //PORTB ^= redMask;
+                //delay_ten_us(10000);
+                //PORTB ^= redMask;
+            }
 
-        while ( decode(&my_results) == ERR ) {
-            delay_ten_us(1);
+            //resume();
+
+            // turn on interrupts on our IR sensor
+            //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
+            delay_ten_us(1000);
         }
-
-
-        if ( my_results.decode_type == NEC ) {
-            PORTB ^= redMask;
-            delay_ten_us(10000);
-            PORTB ^= redMask;
-        }
-
-        resume();
- 
-        // turn on interrupts on our IR sensor
-        //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
-
-        // send patterns, wait for a second.
-
-        PORTB ^= grnMask;
-        delay_ten_us(10000);
-        PORTB ^= grnMask;
-
-        delay_ten_us(100000);
 
     }
     return 0;
