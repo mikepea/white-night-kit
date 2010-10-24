@@ -1,7 +1,12 @@
-// the below should generate a 38k ir signal.
-// I have more somewhere with the ir pulsing separate [so it works summink like sendIr(HIGH|LOW);
-// pulse @ 38k for 6 cycles [low] or 12 cycls [high]].
-// Just loops through a byte sending out each bit
+/*
+ * white_night_code
+ * 
+ * Copyright 2011 BuildBrighton (Mike Pountney, Matthew Edwards)
+ * For details, see http://github.com/mikepea/white-night-code
+ *
+ * Interrupt code based on NECIRrcv by Joe Knapp, IRremote by Ken Shirriff
+ *    http://www.arduino.cc/cgi-bin/yabb2/YaBB.pl?num=1210243556
+ */
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -40,15 +45,17 @@
 #define MARK  0
 #define SPACE 1
 
+#define NEC_BITS 32
+
 #define TOPBIT 0x80000000
 
-// pulse parameters in 10s of usec
-#define NEC_HDR_MARK    900
-#define NEC_HDR_SPACE   450
-#define NEC_BIT_MARK    56
-#define NEC_ONE_SPACE   160
-#define NEC_ZERO_SPACE  56
-#define NEC_RPT_SPACE   225
+
+#define TICKS_LOW(us) (int) (((us)*LTOL/USECPERTICK))
+#define TICKS_HIGH(us) (int) (((us)*UTOL/USECPERTICK + 1))
+
+#define MATCH(measured_ticks, desired_us) ((measured_ticks) >= TICKS_LOW(desired_us) && (measured_ticks) <= TICKS_HIGH(desired_us))
+#define MATCH_MARK(measured_ticks, desired_us) MATCH(measured_ticks, (desired_us) + MARK_EXCESS)
+#define MATCH_SPACE(measured_ticks, desired_us) MATCH((measured_ticks), (desired_us) - MARK_EXCESS)
 
 void delay_ten_us(unsigned long int us) {
   unsigned long int count;
@@ -192,6 +199,24 @@ void send_my_ir_code(char id, char code) {
 #define STATE_SPACE    4
 #define STATE_STOP     5
 
+// results definitions
+#define ERR 0
+#define DECODED 1
+
+// repeat code for NEC
+#define REPEAT 0xffffffff
+
+#define NEC_HDR_MARK    9000
+#define NEC_HDR_SPACE   4500
+#define NEC_BIT_MARK    560
+#define NEC_ONE_SPACE   1600
+#define NEC_ZERO_SPACE  560
+#define NEC_RPT_SPACE   2250
+
+
+// Values for decode_type
+#define NEC 1
+
 #define INIT_TIMER_COUNT0 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
 #define RESET_TIMER0 TCNT0 = INIT_TIMER_COUNT0
 #define CLKFUDGE 5        // fudge factor for clock interrupt overhead
@@ -199,6 +224,11 @@ void send_my_ir_code(char id, char code) {
 #define PRESCALE 8        // timer2 clock prescale
 #define SYSCLOCK 8000000  // main clock speed
 #define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
+
+#define TOLERANCE 25  // percent tolerance in measurements
+#define LTOL (1.0 - TOLERANCE/100.) 
+#define UTOL (1.0 + TOLERANCE/100.) 
+
 #define _GAP 5000 // Minimum gap between transmissions
 #define GAP_TICKS (_GAP/USECPERTICK)
 
@@ -217,10 +247,18 @@ typedef struct {
   unsigned int timer;        // state timer, counts 50uS ticks.
   unsigned int rawbuf[RAWBUF]; // raw data
   uint8_t rawlen;            // counter of entries in rawbuf
-} 
-irparams_t;
+} irparams_t;
+
+typedef struct {
+  int decode_type; // NEC, SONY, RC5, UNKNOWN
+  unsigned long value; // Decoded value
+  int bits; // Number of bits in decoded value
+  volatile unsigned int *rawbuf; // Raw intervals in .5 us ticks
+  int rawlen; // Number of records in rawbuf.
+} decode_results;
 
 volatile irparams_t irparams;
+volatile decode_results my_results;
 
 void enable_interrupts(void) {
   //Timer0 Overflow Interrupt Enable
@@ -233,7 +271,7 @@ void disable_interrupts(void) {
 }
 
 // initialization
-void enableIRIn() {
+void enableIRIn(void) {
   // setup pulse clock timer interrupt
   TCCR0A = 0;  // normal mode
 
@@ -257,11 +295,82 @@ void enableIRIn() {
   // initialize state machine variables
   irparams.rcvstate = STATE_IDLE;
   irparams.rawlen = 0;
-  irparams.blinkflag = 1;
+  irparams.blinkflag = 0;
 
   // set pin modes
   //pinMode(irparams.recvpin, INPUT);
 }
+
+int decodeNEC(decode_results *results) {
+  long data = 0;
+  int offset = 1; // Skip first space
+  // Initial mark
+  if (!MATCH_MARK(results->rawbuf[offset], NEC_HDR_MARK)) {
+    return ERR;
+  }
+  offset++;
+  // Check for repeat
+  if (irparams.rawlen == 4 &&
+    MATCH_SPACE(results->rawbuf[offset], NEC_RPT_SPACE) &&
+    MATCH_MARK(results->rawbuf[offset+1], NEC_BIT_MARK)) {
+    results->bits = 0;
+    results->value = REPEAT;
+    results->decode_type = NEC;
+    return DECODED;
+  }
+  if (irparams.rawlen < 2 * NEC_BITS + 4) {
+    return ERR;
+  }
+  // Initial space  
+  if (!MATCH_SPACE(results->rawbuf[offset], NEC_HDR_SPACE)) {
+    return ERR;
+  }
+  offset++;
+  for (int i = 0; i < NEC_BITS; i++) {
+    if (!MATCH_MARK(results->rawbuf[offset], NEC_BIT_MARK)) {
+      return ERR;
+    }
+    offset++;
+    if (MATCH_SPACE(results->rawbuf[offset], NEC_ONE_SPACE)) {
+      data = (data << 1) | 1;
+    } 
+    else if (MATCH_SPACE(results->rawbuf[offset], NEC_ZERO_SPACE)) {
+      data <<= 1;
+    } 
+    else {
+      return ERR;
+    }
+    offset++;
+  }
+  // Success
+  results->bits = NEC_BITS;
+  results->value = data;
+  results->decode_type = NEC;
+  return DECODED;
+}
+
+void resume(void) {
+  irparams.rcvstate = STATE_IDLE;
+  irparams.rawlen = 0;
+}
+
+// Decodes the received IR message
+// Returns 0 if no data ready, 1 if data ready.
+// Results of decoding are stored in results
+int decode(decode_results *results) {
+    results->rawbuf = irparams.rawbuf;
+    results->rawlen = irparams.rawlen;
+    if (irparams.rcvstate != STATE_STOP) {
+        return ERR;
+    }
+    if (decodeNEC(results)) {
+        return DECODED;
+    }
+    // Throw away and start over
+    resume();
+    return ERR;
+}
+
 
 ISR(PCINT0_vect) {
 }
@@ -344,7 +453,6 @@ ISR(TIMER0_OVF_vect) {
     }
   }
 
-
 }
 
 
@@ -381,7 +489,7 @@ int main(void) {
     //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
 
     // pretty boot light sequence.
-    startUp1();
+    //startUp1();
 
     enableIRIn();
     sei();                // enable microcontroller interrupts
@@ -403,18 +511,28 @@ int main(void) {
         disable_interrupts();
         send_my_ir_code(0x8d, 0x23);
         enable_interrupts();
+
+        while ( decode(&my_results) == ERR ) {
+            delay_ten_us(1);
+        }
+
+
+        if ( my_results.decode_type == NEC ) {
+            PORTB ^= redMask;
+            delay_ten_us(10000);
+            PORTB ^= redMask;
+        }
+
+        resume();
  
         // turn on interrupts on our IR sensor
         //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
 
         // send patterns, wait for a second.
 
-#ifdef DEBUG
-        // debugging
         PORTB ^= grnMask;
         delay_ten_us(10000);
         PORTB ^= grnMask;
-#endif
 
         delay_ten_us(100000);
 
