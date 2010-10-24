@@ -49,12 +49,12 @@ int main(void) {
     while (1==1) {
 
         PORTB ^= grnMask;
-        delay_ten_us(100); // 1 ms
+        delay_ten_us(10); // 1 ms
         PORTB ^= grnMask;
-
         for ( int i = 0; i < 1000; i++ ) {
-            delay_x_us(1000); // 1 ms
+            delay_ten_us(100); // 1 ms
         }
+
     }
 
 }

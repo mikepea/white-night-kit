@@ -167,7 +167,7 @@ void mark(int time) {
   // The mark output is modulated at the PWM frequency.
   //TCCR0A |= _BV(COM0B1); // Enable pin 6 (OC0B) PWM output
   TCCR0A |= _BV(COM0A1); // Enable pin 5 (OC0A) PWM output
-  delay_ten_us(time*10);
+  delay_ten_us(time / 10);
 }
 
 /* Leave pin off for time (given in microseconds) */
@@ -176,7 +176,7 @@ void space(int time) {
   // A space is no output, so the PWM output is disabled.
   //TCCR0A &= ~(_BV(COM0B1)); // Disable pin 6 (OC0B) PWM output
   TCCR0A &= ~(_BV(COM0A1)); // Disable pin 5 (OC0A) PWM output
-  delay_ten_us(time*10);
+  delay_ten_us(time / 10);
 }
 
 void enableIROut(int khz) {
@@ -194,7 +194,7 @@ void enableIROut(int khz) {
   // See my Secrets of Arduino PWM at http://arcfn.com/2009/07/secrets-of-arduino-pwm.html for details.
   
   // Disable the Timer0 Interrupt (which is used for receiving IR)
-  TIMSK &= ~_BV(TOIE0); //Timer0 Overflow Interrupt
+  //TIMSK &= ~_BV(TOIE0); //Timer0 Overflow Interrupt
   
   // When not sending PWM, we want pin high (common annode)
   //PORTB &= ~(irOutMask);
@@ -204,33 +204,43 @@ void enableIROut(int khz) {
   // COM2B = 00: disconnect OC2B; to send signal set to 10: OC2B non-inverted
   // WGM2 = 101: phase-correct PWM with OCRA as top
   // CS2 = 000: no prescaling
-  TCCR0A = _BV(WGM00);
-  TCCR0B = _BV(WGM02) | _BV(CS00);
 
-  // The top value for the timer.  The modulation frequency will be SYSCLOCK / 2 / OCR0A.
-  OCR0A = SYSCLOCK / 2 / khz / 1000;
-  OCR0B = OCR0A / 3; // 33% duty cycle
+  //TCCR0A = _BV(WGM00);
+  //TCCR0B = _BV(WGM02) | _BV(CS00);
+  TCCR0A = 0b01000010;  // COM0A1:0=01 to toggle OC0A on Compare Match
+                        // COM0B1:0=00 to disconnect OC0B
+                        // bits 3:2 are unused
+                        // WGM01:00=10 for CTC Mode (WGM02=0 in TCCR0B)
+  TCCR0B = 0b00000001;  // FOC0A=0 (no force compare)
+                        // F0C0B=0 (no force compare)
+                        // bits 5:4 are unused
+                        // WGM2=0 for CTC Mode (WGM01:00=10 in TCCR0A)
+                        // CS02:00=001 for divide by 1 prescaler (this starts Timer0)
+  //OCR0A = SYSCLOCK / 2 / khz / 1000;
+  OCR0A = 104;  // to output 38,095.2KHz on OC0A (PB0, pin 5)
+  //OCR0B = OCR0A / 3; // 33% duty cycle
 
 }
 
 void sendNEC(unsigned long data, int nbits)
 {
-  enableIROut(38);
-  mark(NEC_HDR_MARK);
-  space(NEC_HDR_SPACE);
-  for (int i = 0; i < nbits; i++) {
-    if (data & TOPBIT) {
-      mark(NEC_BIT_MARK);
-      space(NEC_ONE_SPACE);
-    } 
-    else {
-      mark(NEC_BIT_MARK);
-      space(NEC_ZERO_SPACE);
+    PORTB ^= grnMask;
+    enableIROut(38);
+    mark(NEC_HDR_MARK);
+    space(NEC_HDR_SPACE);
+    for (int i = 0; i < nbits; i++) {
+        if (data & TOPBIT) {
+            mark(NEC_BIT_MARK);
+            space(NEC_ONE_SPACE);
+        } else {
+            mark(NEC_BIT_MARK);
+            space(NEC_ZERO_SPACE);
+        }
+        data <<= 1;
     }
-    data <<= 1;
-  }
-  mark(NEC_BIT_MARK);
-  space(0);
+    mark(NEC_BIT_MARK);
+    space(0);
+    PORTB ^= grnMask;
 }
 
 // initialization
@@ -409,9 +419,8 @@ ISR(TIMER0_OVF_vect) {
 
   if (irparams.blinkflag) {
     if (irdata == MARK) {
-      PORTB ^= redMask; delay_ten_us(1); PORTB ^= redMask;
-    } 
-    else {
+        PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
+    } else {
         //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     }
   }
@@ -461,35 +470,29 @@ int main(void) {
 
     while (1==1) {
 
-        for (int i=0; i<100000; i++) {
+        // transmit our identity, without interruption
+        disable_ir_recving();
+        sendNEC(my_code, 32);  // takes ~70ms
+        enable_ir_recving();
 
-            if ( i = 1 ) {
-                // transmit our identity, without interruption
-                // blink blue
-                disable_ir_recving();
-                //PORTB ^= bluMask;
-                sendNEC(my_code, 32);
-                //PORTB ^= bluMask;
-                enable_ir_recving();
-            }
+        //should take approx 1s
+        for (int i=0; i<730; i++) {
 
             if ( decode(&my_results) == DECODED ) {
-                //PORTB ^= grnMask;
-                //delay_ten_us(100);
-                //PORTB ^= grnMask;
+                PORTB ^= grnMask;
+                delay_ten_us(100);
+                PORTB ^= grnMask;
             }
 
             if ( my_results.decode_type == NEC ) {
-                //PORTB ^= redMask;
-                //delay_ten_us(10000);
-                //PORTB ^= redMask;
+                PORTB ^= redMask;
+                delay_ten_us(1000);
+                PORTB ^= redMask;
+                resume(); // discard results, ready for next code
             }
 
-            //resume();
+            delay_ten_us(100);
 
-            // turn on interrupts on our IR sensor
-            //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
-            delay_ten_us(1000);
         }
 
     }
