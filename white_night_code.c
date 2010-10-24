@@ -35,12 +35,6 @@
 // for debugging, extend delay to be visible on RGB led:
 //#define IR_PULSE_DELAY  10000
 
-// number of 38Khz pulses in a given period
-#define NEC_NUM_PULSES_4500US  176
-#define NEC_NUM_PULSES_560US   22
-//#define NEC_NUM_PULSES_4500US  17600
-//#define NEC_NUM_PULSES_560US   2200
-
 // IR detector output is active low
 #define MARK  0
 #define SPACE 1
@@ -59,7 +53,7 @@
 
 void delay_ten_us(unsigned long int us) {
   unsigned long int count;
-  const unsigned long int DelayCount=6;
+  const unsigned long int DelayCount=8;
 
   while (us != 0) {
     for (count=0; count <= DelayCount; count++) {PINB |= bogusMask;};
@@ -90,108 +84,6 @@ void startUp1(void) {
     }
 }
 
-void send_38khz_pulse(void) {
-    PORTB ^= irOutMask;
-#ifdef DEBUG
-    PORTB ^= redMask;
-#endif
-    delay_x_us(IR_PULSE_DELAY);
-    PORTB ^= irOutMask;
-#ifdef DEBUG
-    PORTB ^= redMask;
-#endif
-    delay_x_us(IR_PULSE_DELAY);
-}
-
-void send_38khz_space(void) {
-    PORTB ^= bogusMask;
-#ifdef DEBUG
-    PORTB ^= bluMask;
-#endif
-    delay_x_us(IR_PULSE_DELAY);
-    PORTB ^= bogusMask;
-#ifdef DEBUG
-    PORTB ^= bluMask;
-#endif
-    delay_x_us(IR_PULSE_DELAY);
-}
-
-void send_38khz_green_space(void) {
-    PORTB ^= bogusMask;
-#ifdef DEBUG
-    PORTB ^= grnMask;
-#endif
-    delay_x_us(IR_PULSE_DELAY);
-    PORTB ^= bogusMask;
-#ifdef DEBUG
-    PORTB ^= grnMask;
-#endif
-    delay_x_us(IR_PULSE_DELAY);
-}
-
-void send_nec_header(void) {
-
-    for (int i = 0; i < NEC_NUM_PULSES_4500US * 2; i++) {
-        send_38khz_pulse();
-    }
-
-    for (int i = 0; i < NEC_NUM_PULSES_4500US; i++) {
-        send_38khz_space();
-    }
-
-}
-
-void send_nec_one(void) {
-
-    for (int i = 0; i < NEC_NUM_PULSES_560US * 1; i++) {
-        send_38khz_pulse();
-    }
-
-    for (int i = 0; i < NEC_NUM_PULSES_560US * 3; i++) {
-        send_38khz_space();
-    }
-
-}
-
-void send_nec_zero(void) {
-
-    for (int i = 0; i < NEC_NUM_PULSES_560US * 1; i++) {
-        send_38khz_pulse();
-    }
-
-    for (int i = 0; i < NEC_NUM_PULSES_560US * 1; i++) {
-        send_38khz_green_space();
-    }
-
-}
-
-void send_nec_byte(char data) {
-    // NEC protocol sends LSB first.
-    // 1 = on for 560us, off for 3x560us
-    // 0 = on for 560us, off for 1x560us
-    for (int pos = 0; pos < 8; pos++) {
-        if ((data & 1) == 1 ) {
-            send_nec_one();
-        } else if ( (data & 1) == 0 ) {
-            send_nec_zero();
-        }
-        data >>= 1;
-    }
-    //nec_mark();
-    //space(0);
-}
-
-void send_nec_ir_code(char address, char command) {
-    send_nec_header();
-    send_nec_byte(address);
-    send_nec_byte(~address);
-    send_nec_byte(command);
-    send_nec_byte(~command);
-}
-
-void send_my_ir_code(char id, char code) {
-    send_nec_ir_code(id, code);
-}
 
 // receiver state machine states
 #define STATE_IDLE     2
@@ -273,21 +165,25 @@ void disable_ir_recving(void) {
 void mark(int time) {
   // Sends an IR mark for the specified number of microseconds.
   // The mark output is modulated at the PWM frequency.
-  TCCR0A |= _BV(COM0B1); // Enable pin 3 PWM output
-  delay_x_us(time);
+  //TCCR0A |= _BV(COM0B1); // Enable pin 6 (OC0B) PWM output
+  TCCR0A |= _BV(COM0A1); // Enable pin 5 (OC0A) PWM output
+  delay_ten_us(time*10);
 }
 
 /* Leave pin off for time (given in microseconds) */
 void space(int time) {
   // Sends an IR space for the specified number of microseconds.
   // A space is no output, so the PWM output is disabled.
-  TCCR0A &= ~(_BV(COM0B1)); // Disable pin 3 PWM output
-  delay_x_us(time);
+  //TCCR0A &= ~(_BV(COM0B1)); // Disable pin 6 (OC0B) PWM output
+  TCCR0A &= ~(_BV(COM0A1)); // Disable pin 5 (OC0A) PWM output
+  delay_ten_us(time*10);
 }
 
 void enableIROut(int khz) {
   // Enables IR output.  The khz value controls the modulation frequency in kilohertz.
-  // The IR output will be on pin 3 (OC0B).
+  //
+  // The IR output will be on pin 5 (OC0A).
+  //
   // This routine is designed for 36-40KHz; if you use it for other values, it's up to you
   // to make sure it gives reasonable results.  (Watch out for overflow / underflow / rounding.)
   // TIMER0 is used in phase-correct PWM mode, with OCR0A controlling the frequency and OCR0B
@@ -300,8 +196,9 @@ void enableIROut(int khz) {
   // Disable the Timer0 Interrupt (which is used for receiving IR)
   TIMSK &= ~_BV(TOIE0); //Timer0 Overflow Interrupt
   
-  // When not sending PWM, we want it low - TODO - do we? common annode...
-  PORTB &= ~(irOutMask);
+  // When not sending PWM, we want pin high (common annode)
+  //PORTB &= ~(irOutMask);
+  //PORTB &= ~(redMask);
   
   // COM2A = 00: disconnect OC2A
   // COM2B = 00: disconnect OC2B; to send signal set to 10: OC2B non-inverted
@@ -361,7 +258,7 @@ void enableIRIn(void) {
   // initialize state machine variables
   irparams.rcvstate = STATE_IDLE;
   irparams.rawlen = 0;
-  irparams.blinkflag = 0;
+  irparams.blinkflag = 1;
 
   // set pin modes
   //pinMode(irparams.recvpin, INPUT);
@@ -515,7 +412,7 @@ ISR(TIMER0_OVF_vect) {
       PORTB ^= redMask; delay_ten_us(1); PORTB ^= redMask;
     } 
     else {
-      PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
+        //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     }
   }
 
@@ -570,9 +467,9 @@ int main(void) {
                 // transmit our identity, without interruption
                 // blink blue
                 disable_ir_recving();
-                PORTB ^= bluMask;
+                //PORTB ^= bluMask;
                 sendNEC(my_code, 32);
-                PORTB ^= bluMask;
+                //PORTB ^= bluMask;
                 enable_ir_recving();
             }
 
