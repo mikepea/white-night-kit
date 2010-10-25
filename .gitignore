@@ -1,5 +1,7 @@
 .map
 *.hex
 *.lst
-IRRemote/
+IRremote/
 white-night-code
+timer-test
+38khz_pwm_code
