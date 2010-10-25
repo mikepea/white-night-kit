@@ -13,6 +13,9 @@
 #include <avr/sleep.h>
 #include <avr/pgmspace.h>
 
+// Apple codes
+#define APPLE_PLAY 0x77E1203A
+
 // for matt's design
 //#define redMask  0b00000010
 //#define grnMask  0b00010000
@@ -23,17 +26,13 @@
 
 // for trippy RGB wave
 #define bogusMask 0b00100000
-#define redMask  0b00000010
-#define grnMask  0b00000100
-#define bluMask  0b00010000
+#define redMask   0b00000010
+#define grnMask   0b00000100
+#define bluMask   0b00010000
+#define rgbMask   0b00010110
 #define irInMask     0b00001000
 #define irOutMask    0b00000001
 #define irInPortBPin  4
-
-// The length of tocks to wait to get a 38KHz signal
-#define IR_PULSE_DELAY  26
-// for debugging, extend delay to be visible on RGB led:
-//#define IR_PULSE_DELAY  10000
 
 // IR detector output is active low
 #define MARK  0
@@ -43,13 +42,86 @@
 
 #define TOPBIT 0x80000000
 
+#define TOLERANCE 25  // percent tolerance in measurements
+#define LTOL (1.0 - TOLERANCE/100.) 
+#define UTOL (1.0 + TOLERANCE/100.) 
 
 #define TICKS_LOW(us) (int) (((us)*LTOL/USECPERTICK))
 #define TICKS_HIGH(us) (int) (((us)*UTOL/USECPERTICK + 1))
 
+// Marks tend to be 100us too long, and spaces 100us too short
+// when received due to sensor lag.
+#define MARK_EXCESS 100
+
 #define MATCH(measured_ticks, desired_us) ((measured_ticks) >= TICKS_LOW(desired_us) && (measured_ticks) <= TICKS_HIGH(desired_us))
 #define MATCH_MARK(measured_ticks, desired_us) MATCH(measured_ticks, (desired_us) + MARK_EXCESS)
 #define MATCH_SPACE(measured_ticks, desired_us) MATCH((measured_ticks), (desired_us) - MARK_EXCESS)
+
+
+
+
+// receiver state machine states
+#define STATE_IDLE     2
+#define STATE_MARK     3
+#define STATE_SPACE    4
+#define STATE_STOP     5
+
+// results definitions
+#define ERR 0
+#define DECODED 1
+
+// repeat code for NEC
+#define REPEAT 0xffffffff
+
+#define NEC_HDR_MARK    9000
+#define NEC_HDR_SPACE   4500
+#define NEC_BIT_MARK    560
+#define NEC_ONE_SPACE   1600
+#define NEC_ZERO_SPACE  560
+#define NEC_RPT_SPACE   2250
+
+
+// Values for decode_type
+#define NONE 0
+#define NEC 1
+
+#define CLKFUDGE 5        // fudge factor for clock interrupt overhead
+#define CLK 256           // max value for clock (timer 2)
+#define PRESCALE 8        // timer2 clock prescale
+#define SYSCLOCK 8000000  // main clock speed
+#define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
+#define USECPERTICK 50  // microseconds per clock interrupt tick
+
+#define INIT_TIMER_COUNT0 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
+#define RESET_TIMER0 TCNT0 = INIT_TIMER_COUNT0
+
+
+#define _GAP 5000 // Minimum gap between transmissions
+#define GAP_TICKS (_GAP/USECPERTICK)
+
+#define RAWBUF 76 // Length of raw duration buffer
+
+
+// information for the interrupt handler
+typedef struct {
+  uint8_t recvpin;           // pin for IR data from detector
+  uint8_t rcvstate;          // state machine
+  uint8_t blinkflag;         // TRUE to enable blinking of pin on IR processing
+  unsigned int timer;        // state timer, counts 50uS ticks.
+  unsigned int rawbuf[RAWBUF]; // raw data
+  uint8_t rawlen;            // counter of entries in rawbuf
+} irparams_t;
+
+typedef struct {
+  int decode_type; // NEC, SONY, RC5, UNKNOWN
+  unsigned long value; // Decoded value
+  int bits; // Number of bits in decoded value
+  volatile unsigned int *rawbuf; // Raw intervals in .5 us ticks
+  int rawlen; // Number of records in rawbuf.
+} decode_results;
+
+volatile irparams_t irparams;
+volatile decode_results my_results;
 
 void delay_ten_us(unsigned long int us) {
   unsigned long int count;
@@ -83,74 +155,6 @@ void startUp1(void) {
         PORTB ^= grnMask;
     }
 }
-
-
-// receiver state machine states
-#define STATE_IDLE     2
-#define STATE_MARK     3
-#define STATE_SPACE    4
-#define STATE_STOP     5
-
-// results definitions
-#define ERR 0
-#define DECODED 1
-
-// repeat code for NEC
-#define REPEAT 0xffffffff
-
-#define NEC_HDR_MARK    9000
-#define NEC_HDR_SPACE   4500
-#define NEC_BIT_MARK    560
-#define NEC_ONE_SPACE   1600
-#define NEC_ZERO_SPACE  560
-#define NEC_RPT_SPACE   2250
-
-
-// Values for decode_type
-#define NEC 1
-
-#define INIT_TIMER_COUNT0 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
-#define RESET_TIMER0 TCNT0 = INIT_TIMER_COUNT0
-#define CLKFUDGE 5        // fudge factor for clock interrupt overhead
-#define CLK 256           // max value for clock (timer 2)
-#define PRESCALE 8        // timer2 clock prescale
-#define SYSCLOCK 8000000  // main clock speed
-#define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
-
-#define TOLERANCE 25  // percent tolerance in measurements
-#define LTOL (1.0 - TOLERANCE/100.) 
-#define UTOL (1.0 + TOLERANCE/100.) 
-
-#define _GAP 5000 // Minimum gap between transmissions
-#define GAP_TICKS (_GAP/USECPERTICK)
-
-#define USECPERTICK 50  // microseconds per clock interrupt tick
-#define RAWBUF 76 // Length of raw duration buffer
-
-// Marks tend to be 100us too long, and spaces 100us too short
-// when received due to sensor lag.
-#define MARK_EXCESS 100
-
-// information for the interrupt handler
-typedef struct {
-  uint8_t recvpin;           // pin for IR data from detector
-  uint8_t rcvstate;          // state machine
-  uint8_t blinkflag;         // TRUE to enable blinking of pin on IR processing
-  unsigned int timer;        // state timer, counts 50uS ticks.
-  unsigned int rawbuf[RAWBUF]; // raw data
-  uint8_t rawlen;            // counter of entries in rawbuf
-} irparams_t;
-
-typedef struct {
-  int decode_type; // NEC, SONY, RC5, UNKNOWN
-  unsigned long value; // Decoded value
-  int bits; // Number of bits in decoded value
-  volatile unsigned int *rawbuf; // Raw intervals in .5 us ticks
-  int rawlen; // Number of records in rawbuf.
-} decode_results;
-
-volatile irparams_t irparams;
-volatile decode_results my_results;
 
 void enable_ir_recving(void) {
   //Timer0 Overflow Interrupt Enable
@@ -224,8 +228,9 @@ void enableIROut(int khz) {
 
 void sendNEC(unsigned long data, int nbits)
 {
-    PORTB ^= grnMask;
-    enableIROut(38);
+    PORTB |= rgbMask; // turns off RGB
+    PORTB ^= grnMask; // turns on green
+    enableIROut(38); // put timer into send mode
     mark(NEC_HDR_MARK);
     space(NEC_HDR_SPACE);
     for (int i = 0; i < nbits; i++) {
@@ -240,7 +245,8 @@ void sendNEC(unsigned long data, int nbits)
     }
     mark(NEC_BIT_MARK);
     space(0);
-    PORTB ^= grnMask;
+    enableIRIn(); // switch back to recv mode
+    PORTB |= rgbMask; // turns off RGB
 }
 
 // initialization
@@ -283,6 +289,7 @@ int decodeNEC(decode_results *results) {
   }
   offset++;
   // Check for repeat
+  ///*
   if (irparams.rawlen == 4 &&
     MATCH_SPACE(results->rawbuf[offset], NEC_RPT_SPACE) &&
     MATCH_MARK(results->rawbuf[offset+1], NEC_BIT_MARK)) {
@@ -291,6 +298,7 @@ int decodeNEC(decode_results *results) {
     results->decode_type = NEC;
     return DECODED;
   }
+  //*/
   if (irparams.rawlen < 2 * NEC_BITS + 4) {
     return ERR;
   }
@@ -419,6 +427,7 @@ ISR(TIMER0_OVF_vect) {
 
   if (irparams.blinkflag) {
     if (irdata == MARK) {
+        //PORTB ^= bluMask;
         PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     } else {
         //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
@@ -466,34 +475,55 @@ int main(void) {
     enableIRIn();
     sei();                // enable microcontroller interrupts
 
-    long my_code = 0x530287ee; // apple macbook remote, send menu command
+    long my_code = 0x530b87ee; // apple macbook remote, send menu command
 
     while (1==1) {
 
-        // transmit our identity, without interruption
-        disable_ir_recving();
-        sendNEC(my_code, 32);  // takes ~70ms
-        enable_ir_recving();
-
         //should take approx 1s
+        // for (int i=0; i<730; i++) {
         for (int i=0; i<730; i++) {
 
             if ( decode(&my_results) == DECODED ) {
-                PORTB ^= grnMask;
-                delay_ten_us(100);
-                PORTB ^= grnMask;
+                // woo!
             }
 
             if ( my_results.decode_type == NEC ) {
-                PORTB ^= redMask;
-                delay_ten_us(1000);
-                PORTB ^= redMask;
+                //if ( ( my_results.value & 0x00ffffff ) == APPLE_PLAY ) {
+                long data = my_results.value;
+                //if ( my_results.value != 0xffffffff ) {
+
+                    for (int i=0; i<32; i++) {
+                        if ( data & 1 ) {
+                            PORTB |= rgbMask; // turns off RGB
+                            PORTB ^= redMask; // turns on red
+                            delay_ten_us(10000);
+                            PORTB |= rgbMask; // turns off RGB
+                            delay_ten_us(10000);
+                        } else {
+                            PORTB |= rgbMask; // turns off RGB
+                            PORTB ^= bluMask; // turns on red
+                            delay_ten_us(10000);
+                            PORTB |= bluMask; // turns off RGB
+                            delay_ten_us(10000);
+                        }
+                        data >>= 1;
+                    }
+
+                //}
+                my_results.decode_type = NONE;
                 resume(); // discard results, ready for next code
             }
 
             delay_ten_us(100);
 
         }
+
+        // transmit our identity, without interruption
+        disable_ir_recving();
+        sendNEC(my_code, 32);  // takes ~70ms
+        enable_ir_recving();
+
+        //delay_ten_us(100000);
 
     }
     return 0;
