@@ -3,5 +3,5 @@
 *.lst
 IRremote/
 white-night-code
-timer-test
+timer_test
 38khz_pwm_code
