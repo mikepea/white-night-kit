@@ -101,7 +101,6 @@
 
 #define RAWBUF 76 // Length of raw duration buffer
 
-
 // information for the interrupt handler
 typedef struct {
   uint8_t recvpin;           // pin for IR data from detector
@@ -373,6 +372,10 @@ ISR(TIMER0_OVF_vect) {
   if (irparams.rawlen >= RAWBUF) {
     // Buffer overflow
     irparams.rcvstate = STATE_STOP;
+  }
+
+  if (irparams.rawlen >= 70 ) {
+        PORTB ^= redMask; delay_ten_us(1); PORTB ^= redMask;
   }
 
   switch(irparams.rcvstate) {
