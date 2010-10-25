@@ -34,11 +34,21 @@
 #define irOutMask    0b00000001
 #define irInPortBPin  4
 
+#define CLKFUDGE 5        // fudge factor for clock interrupt overhead
+#define CLK 256           // max value for clock (timer 0)
+#define PRESCALE 8        // timer0 clock prescale
+#define SYSCLOCK 8000000  // main clock speed
+#define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
+#define USECPERTICK 50  // microseconds per clock interrupt tick
+
+#define INIT_TIMER_COUNT0 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
+#define RESET_TIMER0 TCNT0 = INIT_TIMER_COUNT0
+
 // IR detector output is active low
 #define MARK  0
 #define SPACE 1
 
-#define NEC_BITS 32
+#define NBITS 32         // bits in IR code
 
 #define TOPBIT 0x80000000
 
@@ -46,8 +56,50 @@
 #define LTOL (1.0 - TOLERANCE/100.) 
 #define UTOL (1.0 + TOLERANCE/100.) 
 
+#define STARTNOM      9000
+#define SPACENOM      4500
+#define BITMARKNOM    620
+#define ONESPACENOM   1600
+#define ZEROSPACENOM  480
+#define RPTSPACENOM   2180
+
+#define NEC_HDR_MARK	9000
+#define NEC_HDR_SPACE	4500
+#define NEC_BIT_MARK	560
+#define NEC_ONE_SPACE	1600
+#define NEC_ZERO_SPACE	560
+#define NEC_RPT_SPACE	2250
+
 #define TICKS_LOW(us) (int) (((us)*LTOL/USECPERTICK))
 #define TICKS_HIGH(us) (int) (((us)*UTOL/USECPERTICK + 1))
+
+// pulse parameters (tick counts)
+#define STARTMIN (int)((STARTNOM/USECPERTICK)*LTOL) // start MARK
+#define STARTMAX (int)((STARTNOM/USECPERTICK)*UTOL) 
+#define SPACEMIN (int)((SPACENOM/USECPERTICK)*LTOL) 
+#define SPACEMAX (int)((SPACENOM/USECPERTICK)*UTOL) 
+#define BITMARKMIN (int)((BITMARKNOM/USECPERTICK)*LTOL-2) // extra tolerance for low counts
+#define BITMARKMAX (int)((BITMARKNOM/USECPERTICK)*UTOL+2) 
+#define ONESPACEMIN (int)((ONESPACENOM/USECPERTICK)*LTOL) 
+#define ONESPACEMAX (int)((ONESPACENOM/USECPERTICK)*UTOL) 
+#define ZEROSPACEMIN (int)((ZEROSPACENOM/USECPERTICK)*LTOL-2) 
+#define ZEROSPACEMAX (int)((ZEROSPACENOM/USECPERTICK)*UTOL+2) 
+#define RPTSPACEMIN (int)((RPTSPACENOM/USECPERTICK)*LTOL) 
+#define RPTSPACEMAX (int)((RPTSPACENOM/USECPERTICK)*UTOL) 
+
+// receiver states
+#define IDLE     1
+#define STARTH   2
+#define STARTL   3
+#define BIT      4
+#define ONE      5
+#define ZERO     6
+#define STOP     7
+#define BITMARK  8
+#define RPTMARK  9
+
+// macros
+#define nextstate(X) (irparams.rcvstate = X)
 
 // Marks tend to be 100us too long, and spaces 100us too short
 // when received due to sensor lag.
@@ -57,15 +109,6 @@
 #define MATCH_MARK(measured_ticks, desired_us) MATCH(measured_ticks, (desired_us) + MARK_EXCESS)
 #define MATCH_SPACE(measured_ticks, desired_us) MATCH((measured_ticks), (desired_us) - MARK_EXCESS)
 
-
-
-
-// receiver state machine states
-#define STATE_IDLE     2
-#define STATE_MARK     3
-#define STATE_SPACE    4
-#define STATE_STOP     5
-
 // results definitions
 #define ERR 0
 #define DECODED 1
@@ -73,54 +116,31 @@
 // repeat code for NEC
 #define REPEAT 0xffffffff
 
-#define NEC_HDR_MARK    9000
-#define NEC_HDR_SPACE   4500
-#define NEC_BIT_MARK    560
-#define NEC_ONE_SPACE   1600
-#define NEC_ZERO_SPACE  560
-#define NEC_RPT_SPACE   2250
-
-
 // Values for decode_type
 #define NONE 0
 #define NEC 1
 
-#define CLKFUDGE 5        // fudge factor for clock interrupt overhead
-#define CLK 256           // max value for clock (timer 2)
-#define PRESCALE 8        // timer2 clock prescale
-#define SYSCLOCK 8000000  // main clock speed
-#define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
-#define USECPERTICK 50  // microseconds per clock interrupt tick
-
-#define INIT_TIMER_COUNT0 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
-#define RESET_TIMER0 TCNT0 = INIT_TIMER_COUNT0
 
 
 #define _GAP 5000 // Minimum gap between transmissions
 #define GAP_TICKS (_GAP/USECPERTICK)
 
-#define RAWBUF 76 // Length of raw duration buffer
+#define MAXBUF 8       // IR command code buffer length (circular buffer)
 
-// information for the interrupt handler
-typedef struct {
-  uint8_t recvpin;           // pin for IR data from detector
-  uint8_t rcvstate;          // state machine
-  uint8_t blinkflag;         // TRUE to enable blinking of pin on IR processing
-  unsigned int timer;        // state timer, counts 50uS ticks.
-  unsigned int rawbuf[RAWBUF]; // raw data
-  uint8_t rawlen;            // counter of entries in rawbuf
-} irparams_t;
-
-typedef struct {
-  int decode_type; // NEC, SONY, RC5, UNKNOWN
-  unsigned long value; // Decoded value
-  int bits; // Number of bits in decoded value
-  volatile unsigned int *rawbuf; // Raw intervals in .5 us ticks
-  int rawlen; // Number of records in rawbuf.
-} decode_results;
-
-volatile irparams_t irparams;
-volatile decode_results my_results;
+// state machine variables irparams
+static volatile struct {
+  char rcvstate ;          // IR receiver state
+  char bitcounter ;        // bit counter
+  char irdata ;            // MARK or SPACE read from IR input pin
+  char fptr ;              // irbuf front pointer
+  char rptr ;              // irbuf rear pointer
+  char irpin ;             // pin for IR data from detector
+  char blinkflag ;         // TRUE to enable blinking of pin 13 on IR processing
+  unsigned int timer ;     // state timer
+  unsigned long irmask ;   // one-bit mask for constructing IR code
+  unsigned long ircode ;   // IR code
+  unsigned long irbuf[MAXBUF] ;    // circular buffer for IR codes
+} irparams ;
 
 void delay_ten_us(unsigned long int us) {
   unsigned long int count;
@@ -271,167 +291,165 @@ void enableIRIn(void) {
   //sei();  // enable interrupts
 
   // initialize state machine variables
-  irparams.rcvstate = STATE_IDLE;
-  irparams.rawlen = 0;
-  irparams.blinkflag = 1;
+  irparams.rcvstate = IDLE ;
+  irparams.bitcounter = 0 ;
+  irparams.ircode = 0 ;
+  irparams.fptr = 0 ;
+  irparams.rptr = 0 ;
+  irparams.blinkflag = 1 ;
 
   // set pin modes
   //pinMode(irparams.recvpin, INPUT);
 }
 
-int decodeNEC(decode_results *results) {
-  long data = 0;
-  int offset = 1; // Skip first space
-  // Initial mark
-  if (!MATCH_MARK(results->rawbuf[offset], NEC_HDR_MARK)) {
-    return ERR;
-  }
-  offset++;
-  // Check for repeat
-  ///*
-  if (irparams.rawlen == 4 &&
-    MATCH_SPACE(results->rawbuf[offset], NEC_RPT_SPACE) &&
-    MATCH_MARK(results->rawbuf[offset+1], NEC_BIT_MARK)) {
-    results->bits = 0;
-    results->value = REPEAT;
-    results->decode_type = NEC;
-    return DECODED;
-  }
-  //*/
-  if (irparams.rawlen < 2 * NEC_BITS + 4) {
-    return ERR;
-  }
-  // Initial space  
-  if (!MATCH_SPACE(results->rawbuf[offset], NEC_HDR_SPACE)) {
-    return ERR;
-  }
-  offset++;
-  for (int i = 0; i < NEC_BITS; i++) {
-    if (!MATCH_MARK(results->rawbuf[offset], NEC_BIT_MARK)) {
-      return ERR;
-    }
-    offset++;
-    if (MATCH_SPACE(results->rawbuf[offset], NEC_ONE_SPACE)) {
-      data = (data << 1) | 1;
-    } 
-    else if (MATCH_SPACE(results->rawbuf[offset], NEC_ZERO_SPACE)) {
-      data <<= 1;
-    } 
-    else {
-      return ERR;
-    }
-    offset++;
-  }
-  // Success
-  results->bits = NEC_BITS;
-  results->value = data;
-  results->decode_type = NEC;
-  return DECODED;
-}
-
-void resume(void) {
-  irparams.rcvstate = STATE_IDLE;
-  irparams.rawlen = 0;
-}
-
-// Decodes the received IR message
-// Returns 0 if no data ready, 1 if data ready.
-// Results of decoding are stored in results
-int decode(decode_results *results) {
-    results->rawbuf = irparams.rawbuf;
-    results->rawlen = irparams.rawlen;
-    if (irparams.rcvstate != STATE_STOP) {
-        return ERR;
-    }
-    if (decodeNEC(results)) {
-        return DECODED;
-    }
-    // Throw away and start over
-    resume();
-    return ERR;
-}
-
-
 ISR(PCINT0_vect) {
 }
 
-// TIMER0 interrupt code to collect raw data.
-// Widths of alternating SPACE, MARK are recorded in rawbuf.
+
+/*
+ISR(TIMER0_OVF_vect) {
+  RESET_TIMER0;
+  if ( irparams.timer > 5000 ) {
+      irparams.timer = 0;
+      PORTB ^= bluMask; delay_ten_us(1000); PORTB ^= bluMask; 
+  } 
+  irparams.timer++;
+}
+*/
+
 // Recorded in ticks of 50 microseconds.
-// rawlen counts the number of entries recorded so far.
-// First entry is the SPACE between transmissions.
-// As soon as a SPACE gets long, ready is set, state switches to IDLE, timing of SPACE continues.
-// As soon as first MARK arrives, gap width is recorded, ready is cleared, and new logging starts
+
 ISR(TIMER0_OVF_vect) {
 
   RESET_TIMER0;
-  
-  unsigned char irdata = (PINB & irInMask) >> (irInPortBPin - 1);
 
-  irparams.timer++; // One more 50us tick
-  if (irparams.rawlen >= RAWBUF) {
-    // Buffer overflow
-    irparams.rcvstate = STATE_STOP;
+  irparams.irdata = (PINB & irInMask) >> (irInPortBPin - 1);
+
+  if ( irparams.timer > 21 ) {
+          //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask; 
   }
 
-  if (irparams.rawlen >= 70 ) {
-        PORTB ^= redMask; delay_ten_us(1); PORTB ^= redMask;
-  }
-
+  // process current state
   switch(irparams.rcvstate) {
-  case STATE_IDLE: // In the middle of a gap
-    if (irdata == MARK) {
-      if (irparams.timer < GAP_TICKS) {
-        // Not big enough to be a gap.
-        irparams.timer = 0;
-        //PORTB ^= bluMask; 
-      } else {
-        // gap just ended, record duration and start recording transmission
-        irparams.rawlen = 0;
-        irparams.rawbuf[irparams.rawlen++] = irparams.timer;
-        irparams.timer = 0;
-        irparams.rcvstate = STATE_MARK;
-        //PORTB ^= grnMask; delay_ten_us(1000); PORTB ^= grnMask; 
+    case IDLE:
+      if (irparams.irdata == MARK) {  // got some activity
+          nextstate(STARTH) ;
+          irparams.timer = 0 ;
       }
-    }
-    break;
-
-  case STATE_MARK: // timing MARK
-    if (irdata == SPACE) {   // MARK ended, record time
-      irparams.rawbuf[irparams.rawlen++] = irparams.timer;
-      irparams.timer = 0;
-      irparams.rcvstate = STATE_SPACE;
-    }
-    break;
-
-  case STATE_SPACE: // timing SPACE
-    if (irdata == MARK) { // SPACE just ended, record it
-      irparams.rawbuf[irparams.rawlen++] = irparams.timer;
-      irparams.timer = 0;
-      irparams.rcvstate = STATE_MARK;
-    } 
-    else { // SPACE
-      if (irparams.timer > GAP_TICKS) {
-        // big SPACE, indicates gap between codes
-        // Mark current code as ready for processing
-        // Switch to STOP
-        // Don't reset timer; keep counting space width
-        irparams.rcvstate = STATE_STOP;
-      } 
-    }
-    break;
-
-  case STATE_STOP: // waiting, measuring gap
-    if (irdata == MARK) { // reset gap timer
-      irparams.timer = 0;
-    }
-    break;
+      break ;
+    case STARTH:   // looking for initial start MARK
+      // entered on MARK
+      if (irparams.irdata == SPACE) {   // MARK ended, check time
+        if ((irparams.timer >= STARTMIN) && (irparams.timer <= STARTMAX)) {
+          nextstate(STARTL) ;  // time OK, now look for start SPACE
+          irparams.timer = 0 ;
+          PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask; 
+        }
+        else {
+          nextstate(IDLE) ;  // bad MARK time, go back to IDLE
+        }
+      }
+      else {
+        irparams.timer++ ;  // still MARK, increment timer
+      }
+      break ;
+    case STARTL:
+      // entered on SPACE
+      if (irparams.irdata == MARK) {  // SPACE ended, check time
+        if ((irparams.timer >= SPACEMIN) && (irparams.timer <= SPACEMAX)) {
+          nextstate(BITMARK) ;  // time OK, check first bit MARK 
+          irparams.timer = 0 ;
+          irparams.bitcounter = 0 ;  // initialize ircode vars
+          irparams.irmask = (unsigned long)0x1 ;
+          irparams.ircode = 0 ;
+        }
+        else if ((irparams.timer >= RPTSPACEMIN) && (irparams.timer <= RPTSPACEMAX)) {  // not a start SPACE, maybe this is a repeat signal
+          nextstate(RPTMARK) ;   // yep, it's a repeat signal
+          irparams.timer = 0 ;
+        }
+        else
+          nextstate(IDLE) ;  // bad start SPACE time, go back to IDLE
+      }
+      else {   // still SPACE
+        irparams.timer++ ;    // increment time
+        if (irparams.timer >= SPACEMAX)  // check against max time for SPACE
+          nextstate(IDLE) ;  // max time exceeded, go back to IDLE
+      }
+      break ;
+    case RPTMARK:
+      irparams.timer++ ;  // measuring MARK
+      if (irparams.irdata == SPACE) {  // MARK ended, check time
+        if ((irparams.timer >= BITMARKMIN) && (irparams.timer <= BITMARKMAX))
+          nextstate(IDLE) ;  // repeats are ignored here, just go back to IDLE
+        else
+          nextstate(IDLE) ;  // bad repeat MARK time, go back to IDLE
+      }
+      break ;
+    case BITMARK:
+      irparams.timer++ ;   // timing MARK
+      if (irparams.irdata == SPACE) {   // MARK ended, check time
+        if ((irparams.timer < BITMARKMIN) || (irparams.timer > BITMARKMAX))
+          nextstate(IDLE) ;  // bad MARK time, go back to idle
+        else {
+          irparams.rcvstate = BIT ;  // MARK time OK, go to BIT
+          irparams.timer = 0 ;
+        }
+      }
+      break ;
+    case BIT:
+      irparams.timer++ ; // measuring SPACE
+      if (irparams.irdata == MARK) {  // bit SPACE ended, check time
+        if ((irparams.timer >= ONESPACEMIN) && (irparams.timer <= ONESPACEMAX)) {
+          nextstate(ONE) ;   // SPACE matched ONE timing
+          irparams.timer = 0 ;
+        }
+        else if ((irparams.timer >= ZEROSPACEMIN) && (irparams.timer <= ZEROSPACEMAX)) {
+          nextstate(ZERO) ;  // SPACE matched ZERO timimg
+          irparams.timer = 0 ;
+        }
+        else
+          nextstate(IDLE) ;  // bad SPACE time, go back to IDLE
+      }
+      else {  // still SPACE, check against max time
+        if (irparams.timer > ONESPACEMAX)
+          nextstate(IDLE) ;  // SPACE exceeded max time, go back to IDLE
+      }
+      break ;
+    case ONE:
+      irparams.ircode |= irparams.irmask ;  // got a ONE, update ircode
+      irparams.irmask <<= 1 ;  // set mask to next bit
+      irparams.bitcounter++ ;  // update bitcounter
+      if (irparams.bitcounter < NBITS)  // if not done, look for next bit
+        nextstate(BITMARK) ;
+      else
+        nextstate(STOP) ;  // done, got NBITS, go to STOP
+      break ;
+    case ZERO:
+      irparams.irmask <<= 1 ;  // got a ZERO, update mask
+      irparams.bitcounter++ ;  // update bitcounter
+      if (irparams.bitcounter < NBITS)  // if not done, look for next bit
+        nextstate(BITMARK) ;
+      else
+        nextstate(STOP) ;  // done, got NBITS, go to STOP
+      break ;
+    case STOP:
+      irparams.timer++ ;  //measuring MARK
+      if (irparams.irdata == SPACE) {  // got a SPACE, check stop MARK time
+        if ((irparams.timer >= BITMARKMIN) && (irparams.timer <= BITMARKMAX)) {
+          // time OK -- got an IR code
+          irparams.irbuf[irparams.fptr] = irparams.ircode ;   // store code at fptr position
+          irparams.fptr = (irparams.fptr + 1) % MAXBUF ; // move fptr to next empty slot
+        }
+        nextstate(IDLE) ;  // finished with this code, go back to IDLE
+      }
+      break ;
   }
+  // end state processing
 
   if (irparams.blinkflag) {
-    if (irdata == MARK) {
-        //PORTB ^= bluMask;
-        PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
+    //if (irparams.irdata == MARK) {
+    if (irparams.bitcounter > 30 ) {
+        //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     } else {
         //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     }
@@ -486,35 +504,37 @@ int main(void) {
         // for (int i=0; i<730; i++) {
         for (int i=0; i<730; i++) {
 
-            if ( decode(&my_results) == DECODED ) {
+            /*
+            if ( ( irparams.irbuf[0] & 0x00ffffff ) == APPLE_PLAY ) {
                 // woo!
             }
+            */
 
-            if ( my_results.decode_type == NEC ) {
+            //if ( my_results.decode_type == NEC ) {
+            if ( irparams.irbuf[0] ) {
                 //if ( ( my_results.value & 0x00ffffff ) == APPLE_PLAY ) {
-                long data = my_results.value;
+                long data = irparams.irbuf[0];
                 //if ( my_results.value != 0xffffffff ) {
 
                     for (int i=0; i<32; i++) {
                         if ( data & 1 ) {
                             PORTB |= rgbMask; // turns off RGB
                             PORTB ^= redMask; // turns on red
-                            delay_ten_us(10000);
+                            delay_ten_us(50000);
                             PORTB |= rgbMask; // turns off RGB
-                            delay_ten_us(10000);
+                            delay_ten_us(50000);
                         } else {
                             PORTB |= rgbMask; // turns off RGB
                             PORTB ^= bluMask; // turns on red
-                            delay_ten_us(10000);
+                            delay_ten_us(50000);
                             PORTB |= bluMask; // turns off RGB
-                            delay_ten_us(10000);
+                            delay_ten_us(50000);
                         }
                         data >>= 1;
                     }
 
                 //}
-                my_results.decode_type = NONE;
-                resume(); // discard results, ready for next code
+                irparams.irbuf[0] = 0;
             }
 
             delay_ten_us(100);

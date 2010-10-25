@@ -20,4 +20,5 @@ cbi and sbi are no longer supported, use:
 
   cbi(sfr,bit); is now sfr &= ~(_BV(bit));
 
-
+Setting Fuse bits
+    SUT_CKSEL: FF, DF, C2   - set 8Mhz
