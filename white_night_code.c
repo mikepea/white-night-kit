@@ -482,7 +482,11 @@ int main(void) {
                 long data = irparams.irbuf[0];
                             PORTB |= rgbMask; // turns off RGB
                             PORTB ^= redMask; // turns on red
-                            delay_ten_us(1000);
+                            delay_ten_us(100000);
+                            PORTB ^= bluMask; // turns on red
+                            delay_ten_us(100000);
+                            PORTB ^= grnMask; // turns off RGB
+                            delay_ten_us(100000);
                             PORTB |= rgbMask; // turns off RGB
                 //if ( my_results.value != 0xffffffff ) {
 
