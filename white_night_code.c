@@ -516,14 +516,13 @@ int main(void) {
 
         }
 
+        disable_ir_recving();
         for (int i=0; i<NUM_SENDS; i++) {
            // transmit our identity, without interruption
-           disable_ir_recving();
            sendNEC(my_code, 32);  // takes ~68ms
            delay_ten_us(3280); // delay for 32ms
-           enable_ir_recving();
         }
-
+        enable_ir_recving();
     }
     return 0;
 
