@@ -165,8 +165,6 @@ void disable_ir_recving(void) {
 void mark(int time) {
   // Sends an IR mark for the specified number of microseconds.
   // The mark output is modulated at the PWM frequency.
-  //TCCR0A |= _BV(COM0B1); // Enable pin 6 (OC0B) PWM output
-  //TCCR0A |= _BV(COM0A1); // Enable pin 5 (OC0A) PWM output
   GTCCR |= _BV(COM1B0);  // turn on OC1B PWM output
   delay_ten_us(time / 10);
 }
@@ -175,52 +173,11 @@ void mark(int time) {
 void space(int time) {
   // Sends an IR space for the specified number of microseconds.
   // A space is no output, so the PWM output is disabled.
-  //TCCR0A &= ~(_BV(COM0B1)); // Disable pin 6 (OC0B) PWM output
-  //TCCR0A &= ~(_BV(COM0A1)); // Disable pin 5 (OC0A) PWM output
   GTCCR &= ~(_BV(COM1B0));  // turn on OC1B PWM output
   delay_ten_us(time / 10);
 }
 
 void enableIROut(int khz) {
-  // Enables IR output.  The khz value controls the modulation frequency in kilohertz.
-  //
-  // The IR output will be on pin 5 (OC0A).
-  //
-  // This routine is designed for 36-40KHz; if you use it for other values, it's up to you
-  // to make sure it gives reasonable results.  (Watch out for overflow / underflow / rounding.)
-  // TIMER0 is used in phase-correct PWM mode, with OCR0A controlling the frequency and OCR0B
-  // controlling the duty cycle.
-  // There is no prescaling, so the output frequency is 16MHz / (2 * OCR0A)
-  // To turn the output on and off, we leave the PWM running, but connect and disconnect the output pin.
-  // A few hours staring at the ATmega documentation and this will all make sense.
-  // See my Secrets of Arduino PWM at http://arcfn.com/2009/07/secrets-of-arduino-pwm.html for details.
-
-  // Disable the Timer0 Interrupt (which is used for receiving IR)
-  //TIMSK &= ~_BV(TOIE0); //Timer0 Overflow Interrupt
-
-  // When not sending PWM, we want pin high (common annode)
-  //PORTB &= ~(irOutMask);
-  //PORTB &= ~(redMask);
-
-  // COM2A = 00: disconnect OC2A
-  // COM2B = 00: disconnect OC2B; to send signal set to 10: OC2B non-inverted
-  // WGM2 = 101: phase-correct PWM with OCRA as top
-  // CS2 = 000: no prescaling
-
-  //TCCR0A = _BV(WGM00);
-  //TCCR0B = _BV(WGM02) | _BV(CS00);
-  //TCCR0A = 0b01000010;  // COM0A1:0=01 to toggle OC0A on Compare Match
-                        // COM0B1:0=00 to disconnect OC0B
-                        // bits 3:2 are unused
-                        // WGM01:00=10 for CTC Mode (WGM02=0 in TCCR0B)
-  //TCCR0B = 0b00000001;  // FOC0A=0 (no force compare)
-                        // F0C0B=0 (no force compare)
-                        // bits 5:4 are unused
-                        // WGM2=0 for CTC Mode (WGM01:00=10 in TCCR0A)
-                        // CS02:00=001 for divide by 1 prescaler (this starts Timer0)
-  //OCR0A = SYSCLOCK / 2 / khz / 1000;
-  //OCR0A = 104;  // to output 38,095.2KHz on OC0A (PB0, pin 5)
-  //OCR0B = OCR0A / 3; // 33% duty cycle
 
   TCCR1 = _BV(CS10);  // turn on clock, prescale = 1
   GTCCR = _BV(PWM1B) | _BV(COM1B0);  // toggle OC1B on compare match; PWM mode on OCR1C/B.
@@ -289,7 +246,6 @@ void enableIRIn(void) {
 ISR(PCINT0_vect) {
 }
 
-
 /*
 ISR(TIMER0_OVF_vect) {
   RESET_TIMER0;
@@ -308,8 +264,6 @@ ISR(TIMER0_OVF_vect) {
   RESET_TIMER0;
 
   irparams.irdata = (PINB & irInMask) >> (irInPortBPin - 1);
-
-  //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
 
   // process current state
   switch(irparams.rcvstate) {
@@ -428,14 +382,6 @@ ISR(TIMER0_OVF_vect) {
   }
   // end state processing
 
-  if (irparams.blinkflag) {
-    if (irparams.irdata == MARK) {
-        PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
-    } else {
-        //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
-    }
-  }
-
 }
 
 
@@ -461,7 +407,7 @@ int main(void) {
     enableIRIn();
     sei();                // enable microcontroller interrupts
 
-    long my_code = 0x530b87ee; // apple macbook remote, send menu command
+    long my_code = 0x77E1D03A; // apple macbook remote, send volume up
 
     while (1==1) {
 
@@ -480,14 +426,8 @@ int main(void) {
             if ( irparams.irbuf[0] ) {
                 //if ( ( my_results.value & 0x00ffffff ) == APPLE_PLAY ) {
                 long data = irparams.irbuf[0];
-                            PORTB |= rgbMask; // turns off RGB
-                            PORTB ^= redMask; // turns on red
-                            delay_ten_us(100000);
-                            PORTB ^= bluMask; // turns on red
-                            delay_ten_us(100000);
-                            PORTB ^= grnMask; // turns off RGB
-                            delay_ten_us(100000);
-                            PORTB |= rgbMask; // turns off RGB
+                startUp1();
+
                 //if ( my_results.value != 0xffffffff ) {
 
                     /*
