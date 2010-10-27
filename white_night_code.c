@@ -98,18 +98,6 @@
 // macros
 #define nextstate(X) (irparams.rcvstate = X)
 
-// Marks tend to be 100us too long, and spaces 100us too short
-// when received due to sensor lag.
-#define MARK_EXCESS 100
-
-#define MATCH(measured_ticks, desired_us) ((measured_ticks) >= TICKS_LOW(desired_us) && (measured_ticks) <= TICKS_HIGH(desired_us))
-#define MATCH_MARK(measured_ticks, desired_us) MATCH(measured_ticks, (desired_us) + MARK_EXCESS)
-#define MATCH_SPACE(measured_ticks, desired_us) MATCH((measured_ticks), (desired_us) - MARK_EXCESS)
-
-// results definitions
-#define ERR 0
-#define DECODED 1
-
 // repeat code for NEC
 #define REPEAT 0xffffffff
 
