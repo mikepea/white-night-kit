@@ -1,8 +1,10 @@
 MCU = attiny25
+#MCU = attiny85
 
 F_CPU = 8000000   	# 8 MHz
 
 AVRDUDE_PROGRAMMER = usbtiny
+#AVRDUDE_PROGRAMMER = avrispv2
 
 AVRDUDE_PORT = usb	# programmer connected to USB
 
@@ -106,7 +108,7 @@ AVRDUDE_WRITE_FLASH = -U flash:w:
 
 
 
-AVRDUDE_FLAGS = -p $(MCU) -P $(AVRDUDE_PORT) -c $(AVRDUDE_PROGRAMMER)
+AVRDUDE_FLAGS = -F -p $(MCU) -P $(AVRDUDE_PORT) -c $(AVRDUDE_PROGRAMMER)
 
 
 

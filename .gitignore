@@ -2,6 +2,7 @@
 *.hex
 *.lst
 IRremote/
+NECrecv/
 white-night-code
 timer_test
 38khz_pwm_code

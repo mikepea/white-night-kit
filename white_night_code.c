@@ -17,22 +17,18 @@
 #define APPLE_PLAY 0x77E1203A
 
 // for matt's design
-//#define redMask  0b00000010
-//#define grnMask  0b00010000
-//#define bluMask  0b00000100
-//#define irInMask     0b00001000
-//#define irOutMask    0b00000001
-//#define irInPortBPin  4;
-
-// for trippy RGB wave
-#define bogusMask 0b00100000
-#define redMask   0b00000010
-#define grnMask   0b00000100
-#define bluMask   0b00010000
-#define rgbMask   0b00010110
+#define bogusMask    0b00100000
+#define redMask      0b00000100
+#define grnMask      0b00000010
+#define bluMask      0b00000001
+#define rgbMask      0b00000111
 #define irInMask     0b00001000
-#define irOutMask    0b00000001
+#define irOutMask    0b00010000
+// 4 = PB3
 #define irInPortBPin  4
+
+// how many times to send our IR code in each 1s loop.
+#define NUM_SENDS 2
 
 #define CLKFUDGE 5        // fudge factor for clock interrupt overhead
 #define CLK 256           // max value for clock (timer 0)
@@ -147,18 +143,10 @@ void delay_ten_us(unsigned long int us) {
   const unsigned long int DelayCount=8;
 
   while (us != 0) {
-    for (count=0; count <= DelayCount; count++) {PINB |= bogusMask;};
+    for (count=0; count <= DelayCount; count++) {
+            PINB |= bogusMask;
+    }
     us--;
-  }
-}
-
-void delay_x_us(unsigned long int x) {
-  unsigned long int count;
-  const unsigned long int DelayCount=0;
-
-  while (x != 0) {
-    for (count=0; count <= DelayCount; count++) {PINB |= 0b00100000;};
-    x--;
   }
 }
 
@@ -189,7 +177,8 @@ void mark(int time) {
   // Sends an IR mark for the specified number of microseconds.
   // The mark output is modulated at the PWM frequency.
   //TCCR0A |= _BV(COM0B1); // Enable pin 6 (OC0B) PWM output
-  TCCR0A |= _BV(COM0A1); // Enable pin 5 (OC0A) PWM output
+  //TCCR0A |= _BV(COM0A1); // Enable pin 5 (OC0A) PWM output
+  GTCCR |= _BV(COM1B0);  // turn on OC1B PWM output
   delay_ten_us(time / 10);
 }
 
@@ -198,7 +187,8 @@ void space(int time) {
   // Sends an IR space for the specified number of microseconds.
   // A space is no output, so the PWM output is disabled.
   //TCCR0A &= ~(_BV(COM0B1)); // Disable pin 6 (OC0B) PWM output
-  TCCR0A &= ~(_BV(COM0A1)); // Disable pin 5 (OC0A) PWM output
+  //TCCR0A &= ~(_BV(COM0A1)); // Disable pin 5 (OC0A) PWM output
+  GTCCR &= ~(_BV(COM1B0));  // turn on OC1B PWM output
   delay_ten_us(time / 10);
 }
 
@@ -230,18 +220,23 @@ void enableIROut(int khz) {
 
   //TCCR0A = _BV(WGM00);
   //TCCR0B = _BV(WGM02) | _BV(CS00);
-  TCCR0A = 0b01000010;  // COM0A1:0=01 to toggle OC0A on Compare Match
+  //TCCR0A = 0b01000010;  // COM0A1:0=01 to toggle OC0A on Compare Match
                         // COM0B1:0=00 to disconnect OC0B
                         // bits 3:2 are unused
                         // WGM01:00=10 for CTC Mode (WGM02=0 in TCCR0B)
-  TCCR0B = 0b00000001;  // FOC0A=0 (no force compare)
+  //TCCR0B = 0b00000001;  // FOC0A=0 (no force compare)
                         // F0C0B=0 (no force compare)
                         // bits 5:4 are unused
                         // WGM2=0 for CTC Mode (WGM01:00=10 in TCCR0A)
                         // CS02:00=001 for divide by 1 prescaler (this starts Timer0)
   //OCR0A = SYSCLOCK / 2 / khz / 1000;
-  OCR0A = 104;  // to output 38,095.2KHz on OC0A (PB0, pin 5)
+  //OCR0A = 104;  // to output 38,095.2KHz on OC0A (PB0, pin 5)
   //OCR0B = OCR0A / 3; // 33% duty cycle
+
+  TCCR1 = _BV(CS10);  // turn on clock, prescale = 1 
+  GTCCR = _BV(PWM1B) | _BV(COM1B0);  // toggle OC1B on compare match; PWM mode on OCR1C/B.
+  OCR1C = 210;
+  //OCR1B = 70;
 
 }
 
@@ -250,8 +245,8 @@ void sendNEC(unsigned long data, int nbits)
     PORTB |= rgbMask; // turns off RGB
     PORTB ^= grnMask; // turns on green
     enableIROut(38); // put timer into send mode
-    mark(NEC_HDR_MARK);
-    space(NEC_HDR_SPACE);
+    //mark(NEC_HDR_MARK);
+    //space(NEC_HDR_SPACE);
     for (int i = 0; i < nbits; i++) {
         if (data & TOPBIT) {
             mark(NEC_BIT_MARK);
@@ -325,9 +320,7 @@ ISR(TIMER0_OVF_vect) {
 
   irparams.irdata = (PINB & irInMask) >> (irInPortBPin - 1);
 
-  if ( irparams.timer > 21 ) {
-          //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask; 
-  }
+  //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask; 
 
   // process current state
   switch(irparams.rcvstate) {
@@ -343,9 +336,8 @@ ISR(TIMER0_OVF_vect) {
         if ((irparams.timer >= STARTMIN) && (irparams.timer <= STARTMAX)) {
           nextstate(STARTL) ;  // time OK, now look for start SPACE
           irparams.timer = 0 ;
-          PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask; 
-        }
-        else {
+        PORTB ^= redMask; delay_ten_us(2); PORTB ^= redMask;
+        } else {
           nextstate(IDLE) ;  // bad MARK time, go back to IDLE
         }
       }
@@ -369,6 +361,7 @@ ISR(TIMER0_OVF_vect) {
         }
         else
           nextstate(IDLE) ;  // bad start SPACE time, go back to IDLE
+          PORTB ^= bluMask; delay_ten_us(100); PORTB ^= bluMask; 
       }
       else {   // still SPACE
         irparams.timer++ ;    // increment time
@@ -447,9 +440,8 @@ ISR(TIMER0_OVF_vect) {
   // end state processing
 
   if (irparams.blinkflag) {
-    //if (irparams.irdata == MARK) {
-    if (irparams.bitcounter > 30 ) {
-        //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
+    if (irparams.irdata == MARK) {
+        PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     } else {
         //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
     }
@@ -460,36 +452,18 @@ ISR(TIMER0_OVF_vect) {
 
 int main(void) {
 
+    // zero our timer controls, for now
     TCCR0A = 0;
     TCCR0B = 0;
-    PORTB = 0xff; // write all outputs high & internal resistors on inputs (turns led's off)
+    TCCR1 = 0;
+    GTCCR = 0;
     
-    // disable the Watch Dog Timer (since we won't be using it, this will save battery power)
-    //MCUSR = 0b00000000;   // first step:   WDRF=0 (Watch Dog Reset Flag)
-    //WDTCR = 0b00011000;   // second step:  WDCE=1 and WDE=1 (Watch Dog Change Enable and Watch Dog Enable)
-    //WDTCR = 0b00000000;   // third step:   WDE=0
-    // turn off power to the USI and ADC modules (since we won't be using it, this will save battery power)
-    //PRR = 0b00000011;
-    // disable all Timer interrupts
-    //TIMSK = 0x00;         // setting a bit to 0 disables interrupts
-    // set up the input and output pins (the ATtiny25 only has PORTB pins)
-    DDRB = 0b00010111;  // setting a bit to 1 makes it an output, setting a bit to 0 makes it an input
-                        //   PB5 (unused) is input
-                        //   PB4 (Blue LED) is output
-                        //   PB3 (IR detect) is input
-                        //   PB2 (Green LED) is output
-                        //   PB1 (Red LED) is output
-                        //   PB0 (IR LED) is output
+    DDRB =  (rgbMask) | ( irOutMask );
+
     PORTB = 0xFF;   // all PORTB output pins High (all LEDs off) 
                     // -- (if we set an input pin High it activates a 
                     // pull-up resistor, which we don't need, but don't care about either)
                     
-    // set up PB3 so that a logic change causes an interrupt 
-    // (this will happen when the IR detector goes from seeing 
-    // IR to not seeing IR, or from not seeing IR to seeing IR)
-    //GIMSK = 0b00100000;   // PCIE=1 to enable Pin Change Interrupts
-    //PCMSK = 0b00001000;   // PCINT3 bit = 1 to enable Pin Change Interrupts for PB3
-
     // pretty boot light sequence.
     //startUp1();
 
@@ -502,20 +476,20 @@ int main(void) {
 
         //should take approx 1s
         // for (int i=0; i<730; i++) {
-        for (int i=0; i<730; i++) {
 
-            /*
-            if ( ( irparams.irbuf[0] & 0x00ffffff ) == APPLE_PLAY ) {
-                // woo!
-            }
-            */
+        for (int i=0; i<730; i++) {
 
             //if ( my_results.decode_type == NEC ) {
             if ( irparams.irbuf[0] ) {
                 //if ( ( my_results.value & 0x00ffffff ) == APPLE_PLAY ) {
                 long data = irparams.irbuf[0];
+                            PORTB |= rgbMask; // turns off RGB
+                            PORTB ^= redMask; // turns on red
+                            delay_ten_us(1000);
+                            PORTB |= rgbMask; // turns off RGB
                 //if ( my_results.value != 0xffffffff ) {
 
+                    /*
                     for (int i=0; i<32; i++) {
                         if ( data & 1 ) {
                             PORTB |= rgbMask; // turns off RGB
@@ -532,6 +506,7 @@ int main(void) {
                         }
                         data >>= 1;
                     }
+                    */
 
                 //}
                 irparams.irbuf[0] = 0;
@@ -541,12 +516,13 @@ int main(void) {
 
         }
 
-        // transmit our identity, without interruption
-        disable_ir_recving();
-        sendNEC(my_code, 32);  // takes ~70ms
-        enable_ir_recving();
-
-        //delay_ten_us(100000);
+        for (int i=0; i<NUM_SENDS; i++) {
+           // transmit our identity, without interruption
+           disable_ir_recving();
+           sendNEC(my_code, 32);  // takes ~68ms
+           delay_ten_us(3280); // delay for 32ms
+           enable_ir_recving();
+        }
 
     }
     return 0;
