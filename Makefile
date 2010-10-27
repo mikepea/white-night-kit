@@ -11,8 +11,7 @@ AVRDUDE_PORT = usb	# programmer connected to USB
 # Default target.
 
 all: 	begin gccversion \
-	minipov.hex all_leds.hex alt_leds.hex mypov.hex test_leds.hex \
-	largeimage.hex\
+	white_night_code.hex \
 	finished end
 
 # Program the device

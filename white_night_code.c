@@ -1,6 +1,6 @@
 /*
  * white_night_code
- * 
+ *
  * Copyright 2011 BuildBrighton (Mike Pountney, Matthew Edwards)
  * For details, see http://github.com/mikepea/white-night-code
  *
@@ -15,6 +15,7 @@
 
 // Apple codes
 #define APPLE_PLAY 0x77E1203A
+#define IR_DATA_PRINT_DELAY 25000
 
 // for matt's design
 #define bogusMask    0b00100000
@@ -28,7 +29,7 @@
 #define irInPortBPin  4
 
 // how many times to send our IR code in each 1s loop.
-#define NUM_SENDS 2
+#define NUM_SENDS 1
 
 #define CLKFUDGE 5        // fudge factor for clock interrupt overhead
 #define CLK 256           // max value for clock (timer 0)
@@ -49,8 +50,8 @@
 #define TOPBIT 0x80000000
 
 #define TOLERANCE 25  // percent tolerance in measurements
-#define LTOL (1.0 - TOLERANCE/100.) 
-#define UTOL (1.0 + TOLERANCE/100.) 
+#define LTOL (1.0 - TOLERANCE/100.)
+#define UTOL (1.0 + TOLERANCE/100.)
 
 #define STARTNOM      9000
 #define SPACENOM      4500
@@ -71,17 +72,17 @@
 
 // pulse parameters (tick counts)
 #define STARTMIN (int)((STARTNOM/USECPERTICK)*LTOL) // start MARK
-#define STARTMAX (int)((STARTNOM/USECPERTICK)*UTOL) 
-#define SPACEMIN (int)((SPACENOM/USECPERTICK)*LTOL) 
-#define SPACEMAX (int)((SPACENOM/USECPERTICK)*UTOL) 
+#define STARTMAX (int)((STARTNOM/USECPERTICK)*UTOL)
+#define SPACEMIN (int)((SPACENOM/USECPERTICK)*LTOL)
+#define SPACEMAX (int)((SPACENOM/USECPERTICK)*UTOL)
 #define BITMARKMIN (int)((BITMARKNOM/USECPERTICK)*LTOL-2) // extra tolerance for low counts
-#define BITMARKMAX (int)((BITMARKNOM/USECPERTICK)*UTOL+2) 
-#define ONESPACEMIN (int)((ONESPACENOM/USECPERTICK)*LTOL) 
-#define ONESPACEMAX (int)((ONESPACENOM/USECPERTICK)*UTOL) 
-#define ZEROSPACEMIN (int)((ZEROSPACENOM/USECPERTICK)*LTOL-2) 
-#define ZEROSPACEMAX (int)((ZEROSPACENOM/USECPERTICK)*UTOL+2) 
-#define RPTSPACEMIN (int)((RPTSPACENOM/USECPERTICK)*LTOL) 
-#define RPTSPACEMAX (int)((RPTSPACENOM/USECPERTICK)*UTOL) 
+#define BITMARKMAX (int)((BITMARKNOM/USECPERTICK)*UTOL+2)
+#define ONESPACEMIN (int)((ONESPACENOM/USECPERTICK)*LTOL)
+#define ONESPACEMAX (int)((ONESPACENOM/USECPERTICK)*UTOL)
+#define ZEROSPACEMIN (int)((ZEROSPACENOM/USECPERTICK)*LTOL-2)
+#define ZEROSPACEMAX (int)((ZEROSPACENOM/USECPERTICK)*UTOL+2)
+#define RPTSPACEMIN (int)((RPTSPACENOM/USECPERTICK)*LTOL)
+#define RPTSPACEMAX (int)((RPTSPACENOM/USECPERTICK)*UTOL)
 
 // receiver states
 #define IDLE     1
@@ -205,14 +206,14 @@ void enableIROut(int khz) {
   // To turn the output on and off, we leave the PWM running, but connect and disconnect the output pin.
   // A few hours staring at the ATmega documentation and this will all make sense.
   // See my Secrets of Arduino PWM at http://arcfn.com/2009/07/secrets-of-arduino-pwm.html for details.
-  
+
   // Disable the Timer0 Interrupt (which is used for receiving IR)
   //TIMSK &= ~_BV(TOIE0); //Timer0 Overflow Interrupt
-  
+
   // When not sending PWM, we want pin high (common annode)
   //PORTB &= ~(irOutMask);
   //PORTB &= ~(redMask);
-  
+
   // COM2A = 00: disconnect OC2A
   // COM2B = 00: disconnect OC2B; to send signal set to 10: OC2B non-inverted
   // WGM2 = 101: phase-correct PWM with OCRA as top
@@ -233,10 +234,10 @@ void enableIROut(int khz) {
   //OCR0A = 104;  // to output 38,095.2KHz on OC0A (PB0, pin 5)
   //OCR0B = OCR0A / 3; // 33% duty cycle
 
-  TCCR1 = _BV(CS10);  // turn on clock, prescale = 1 
+  TCCR1 = _BV(CS10);  // turn on clock, prescale = 1
   GTCCR = _BV(PWM1B) | _BV(COM1B0);  // toggle OC1B on compare match; PWM mode on OCR1C/B.
   OCR1C = 210;
-  //OCR1B = 70;
+  OCR1B = 70;
 
 }
 
@@ -245,8 +246,8 @@ void sendNEC(unsigned long data, int nbits)
     PORTB |= rgbMask; // turns off RGB
     PORTB ^= grnMask; // turns on green
     enableIROut(38); // put timer into send mode
-    //mark(NEC_HDR_MARK);
-    //space(NEC_HDR_SPACE);
+    mark(NEC_HDR_MARK);
+    space(NEC_HDR_SPACE);
     for (int i = 0; i < nbits; i++) {
         if (data & TOPBIT) {
             mark(NEC_BIT_MARK);
@@ -306,8 +307,8 @@ ISR(TIMER0_OVF_vect) {
   RESET_TIMER0;
   if ( irparams.timer > 5000 ) {
       irparams.timer = 0;
-      PORTB ^= bluMask; delay_ten_us(1000); PORTB ^= bluMask; 
-  } 
+      PORTB ^= bluMask; delay_ten_us(1000); PORTB ^= bluMask;
+  }
   irparams.timer++;
 }
 */
@@ -320,7 +321,7 @@ ISR(TIMER0_OVF_vect) {
 
   irparams.irdata = (PINB & irInMask) >> (irInPortBPin - 1);
 
-  //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask; 
+  //PORTB ^= bluMask; delay_ten_us(1); PORTB ^= bluMask;
 
   // process current state
   switch(irparams.rcvstate) {
@@ -349,7 +350,7 @@ ISR(TIMER0_OVF_vect) {
       // entered on SPACE
       if (irparams.irdata == MARK) {  // SPACE ended, check time
         if ((irparams.timer >= SPACEMIN) && (irparams.timer <= SPACEMAX)) {
-          nextstate(BITMARK) ;  // time OK, check first bit MARK 
+          nextstate(BITMARK) ;  // time OK, check first bit MARK
           irparams.timer = 0 ;
           irparams.bitcounter = 0 ;  // initialize ircode vars
           irparams.irmask = (unsigned long)0x1 ;
@@ -361,7 +362,7 @@ ISR(TIMER0_OVF_vect) {
         }
         else
           nextstate(IDLE) ;  // bad start SPACE time, go back to IDLE
-          PORTB ^= bluMask; delay_ten_us(100); PORTB ^= bluMask; 
+          PORTB ^= bluMask; delay_ten_us(100); PORTB ^= bluMask;
       }
       else {   // still SPACE
         irparams.timer++ ;    // increment time
@@ -457,13 +458,13 @@ int main(void) {
     TCCR0B = 0;
     TCCR1 = 0;
     GTCCR = 0;
-    
+
     DDRB =  (rgbMask) | ( irOutMask );
 
-    PORTB = 0xFF;   // all PORTB output pins High (all LEDs off) 
-                    // -- (if we set an input pin High it activates a 
+    PORTB = 0xFF;   // all PORTB output pins High (all LEDs off)
+                    // -- (if we set an input pin High it activates a
                     // pull-up resistor, which we don't need, but don't care about either)
-                    
+
     // pretty boot light sequence.
     //startUp1();
 
@@ -474,9 +475,15 @@ int main(void) {
 
     while (1==1) {
 
-        //should take approx 1s
-        // for (int i=0; i<730; i++) {
+        disable_ir_recving();
+        for (int i=0; i<NUM_SENDS; i++) {
+           // transmit our identity, without interruption
+           sendNEC(my_code, 32);  // takes ~68ms
+           delay_ten_us(3280); // delay for 32ms
+        }
+        enable_ir_recving();
 
+        // loop a number of times, to have ~1s of recving/game logic
         for (int i=0; i<730; i++) {
 
             //if ( my_results.decode_type == NEC ) {
@@ -489,24 +496,22 @@ int main(void) {
                             PORTB |= rgbMask; // turns off RGB
                 //if ( my_results.value != 0xffffffff ) {
 
-                    /*
                     for (int i=0; i<32; i++) {
                         if ( data & 1 ) {
                             PORTB |= rgbMask; // turns off RGB
                             PORTB ^= redMask; // turns on red
-                            delay_ten_us(50000);
+                            delay_ten_us(IR_DATA_PRINT_DELAY);
                             PORTB |= rgbMask; // turns off RGB
-                            delay_ten_us(50000);
+                            delay_ten_us(IR_DATA_PRINT_DELAY);
                         } else {
                             PORTB |= rgbMask; // turns off RGB
                             PORTB ^= bluMask; // turns on red
-                            delay_ten_us(50000);
+                            delay_ten_us(IR_DATA_PRINT_DELAY);
                             PORTB |= bluMask; // turns off RGB
-                            delay_ten_us(50000);
+                            delay_ten_us(IR_DATA_PRINT_DELAY);
                         }
                         data >>= 1;
                     }
-                    */
 
                 //}
                 irparams.irbuf[0] = 0;
@@ -516,13 +521,6 @@ int main(void) {
 
         }
 
-        disable_ir_recving();
-        for (int i=0; i<NUM_SENDS; i++) {
-           // transmit our identity, without interruption
-           sendNEC(my_code, 32);  // takes ~68ms
-           delay_ten_us(3280); // delay for 32ms
-        }
-        enable_ir_recving();
     }
     return 0;
 
