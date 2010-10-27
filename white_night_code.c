@@ -486,6 +486,7 @@ int main(void) {
                             PORTB |= rgbMask; // turns off RGB
                 //if ( my_results.value != 0xffffffff ) {
 
+                    /*
                     for (int i=0; i<32; i++) {
                         if ( data & 1 ) {
                             PORTB |= rgbMask; // turns off RGB
@@ -502,6 +503,7 @@ int main(void) {
                         }
                         data >>= 1;
                     }
+                    */
 
                 //}
                 irparams.irbuf[0] = 0;
