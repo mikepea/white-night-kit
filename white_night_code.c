@@ -448,8 +448,10 @@ int main(void) {
     GTCCR = 0;
 
     DDRB =  (rgbMask) | ( irOutMask );
-
-    PORTB = 0xFF;   // all PORTB output pins High (all LEDs off)
+ 
+    // all PORTB output pins High (all LEDs off), except for the 
+    // IR LED, which is SOURCE not SINK
+    PORTB = ( 0xFF & ~irOutMask );
                     // -- (if we set an input pin High it activates a
                     // pull-up resistor, which we don't need, but don't care about either)
 
