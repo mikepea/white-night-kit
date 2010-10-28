@@ -17,13 +17,13 @@
 #include <avr/sleep.h>
 #include <avr/pgmspace.h>
 
-// Apple codes
-#define APPLE_PLAY              0x5c0487ee
-#define APPLE_VOLUME_UP         0x5c0b87ee
-#define APPLE_VOLUME_DOWN       0x5c0d87ee
-#define APPLE_NEXT_TRACK        0x5c0787ee
-#define APPLE_PREV_TRACK        0x5c0887ee
-#define APPLE_MENU              0x5c0287ee
+// Apple codes (device id is first byte, mine is 5c)
+#define APPLE_PLAY              0x000487ee
+#define APPLE_VOLUME_UP         0x000b87ee
+#define APPLE_VOLUME_DOWN       0x000d87ee
+#define APPLE_NEXT_TRACK        0x000787ee
+#define APPLE_PREV_TRACK        0x000887ee
+#define APPLE_MENU              0x000287ee
 
 // delay for flashing out the recd code
 #define IR_DATA_PRINT_DELAY 50000
@@ -455,24 +455,24 @@ int main(void) {
                 if (IRBUF_CUR) {
 
                     //flash_ircode(irparams.irbuf[j]);
-                    if ( IRBUF_CUR & ~ID_MASK == APPLE_VOLUME_UP ) {
+                    if ( IRBUF_CUR <<8 == APPLE_VOLUME_UP <<8 ) {
                         colour[RED] ^= 1;
-                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_NEXT_TRACK ) {
+                    } else if ( IRBUF_CUR <<8 == APPLE_NEXT_TRACK <<8) {
                         colour[GREEN] ^= 1;
-                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_VOLUME_DOWN ) {
-                        colour[BLUE] ^= 1;
-                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_PLAY ) {
+                    } else if ( IRBUF_CUR <<8 == APPLE_VOLUME_DOWN <<8) {
+                        colour[BLUE] ^= 0;
+                    } else if ( IRBUF_CUR <<8 == APPLE_PLAY <<8) {
                         colour[RED] = 1;
                         colour[GREEN] = 1;
                         colour[BLUE] = 1;
-                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_MENU ) {
+                    } else if ( IRBUF_CUR <<8 == APPLE_MENU <<8) {
                         colour[RED] = 0;
                         colour[GREEN] = 0;
                         colour[BLUE] = 0;
                     } else {
-                        colour[RED] = ( irparams.irbuf[j] & ( 1 << RED ) ) >> RED;
-                        colour[GREEN] = ( irparams.irbuf[j] & ( 1 << GREEN ) ) >> GREEN;
-                        colour[BLUE] = ( irparams.irbuf[j] & ( 1 << BLUE ) ) >> BLUE;
+                        colour[RED] =   ( IRBUF_CUR & ( 1 << RED ) ) >> RED;
+                        colour[GREEN] = ( IRBUF_CUR & ( 1 << GREEN ) ) >> GREEN;
+                        colour[BLUE] =  ( IRBUF_CUR & ( 1 << BLUE ) ) >> BLUE;
                     }
                     irparams.irbuf[j] = 0;
 
