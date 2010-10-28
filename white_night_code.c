@@ -8,21 +8,25 @@
  *    http://www.arduino.cc/cgi-bin/yabb2/YaBB.pl?num=1210243556
  */
 
+#define MY_ID   0x01000000
+#define ID_MASK 0xff000000
+
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include <avr/pgmspace.h>
 
 // Apple codes
-#define APPLE_PLAY 0x77E1203A
-#define APPLE_VOLUME_UP         0x77E1D03A
-#define APPLE_VOLUME_DOWN       0x77E1B03A
-#define APPLE_NEXT_TRACK        0x77E1E03A
-#define APPLE_PREV_TRACK        0x77E1103A
-#define APPLE_MENU              0x77E1403A
+#define APPLE_PLAY              0x5c0487ee
+#define APPLE_VOLUME_UP         0x5c0b87ee
+#define APPLE_VOLUME_DOWN       0x5c0d87ee
+#define APPLE_NEXT_TRACK        0x5c0787ee
+#define APPLE_PREV_TRACK        0x5c0887ee
+#define APPLE_MENU              0x5c0287ee
 
 // delay for flashing out the recd code
-#define IR_DATA_PRINT_DELAY 25000
+#define IR_DATA_PRINT_DELAY 50000
 
 
 // for matt's design
@@ -72,12 +76,12 @@
 #define ZEROSPACENOM  480
 #define RPTSPACENOM   2180
 
-#define NEC_HDR_MARK	9000
-#define NEC_HDR_SPACE	4500
-#define NEC_BIT_MARK	560
-#define NEC_ONE_SPACE	1600
-#define NEC_ZERO_SPACE	560
-#define NEC_RPT_SPACE	2250
+#define NEC_HDR_MARK    9000
+#define NEC_HDR_SPACE   4500
+#define NEC_BIT_MARK    560
+#define NEC_ONE_SPACE   1600
+#define NEC_ZERO_SPACE  560
+#define NEC_RPT_SPACE   2250
 
 #define TICKS_LOW(us) (int) (((us)*LTOL/USECPERTICK))
 #define TICKS_HIGH(us) (int) (((us)*UTOL/USECPERTICK + 1))
@@ -151,18 +155,6 @@ void delay_ten_us(unsigned long int us) {
   }
 }
 
-// Little start up pattern
-void startUp1(void) {
-    for (int i = 0; i<15; i++) {
-        PORTB ^= grnMask;
-        delay_ten_us(1600-(i*100));
-        PORTB ^= bluMask;
-        delay_ten_us(1600-(i*100));
-        PORTB ^= bluMask;
-        delay_ten_us(1600-(i*100));
-        PORTB ^= grnMask;
-    }
-}
 
 void enable_ir_recving(void) {
   //Timer0 Overflow Interrupt Enable
@@ -189,6 +181,7 @@ void space(int time) {
   delay_ten_us(time / 10);
 }
 
+
 void enableIROut(int khz) {
 
   TCCR1 = _BV(CS10);  // turn on clock, prescale = 1
@@ -206,20 +199,21 @@ void sendNEC(unsigned long data, int nbits)
     mark(NEC_HDR_MARK);
     space(NEC_HDR_SPACE);
     for (int i = 0; i < nbits; i++) {
-        if (data & TOPBIT) {
+        if (data & 1) {
             mark(NEC_BIT_MARK);
             space(NEC_ONE_SPACE);
         } else {
             mark(NEC_BIT_MARK);
             space(NEC_ZERO_SPACE);
         }
-        data <<= 1;
+        data >>= 1;
     }
     mark(NEC_BIT_MARK);
     space(0);
     enableIRIn(); // switch back to recv mode
     PORTB |= rgbMask; // turns off RGB
 }
+
 
 // initialization
 void enableIRIn(void) {
@@ -255,8 +249,6 @@ void enableIRIn(void) {
   //pinMode(irparams.recvpin, INPUT);
 }
 
-ISR(PCINT0_vect) {
-}
 
 /*
 ISR(TIMER0_OVF_vect) {
@@ -291,7 +283,6 @@ ISR(TIMER0_OVF_vect) {
         if ((irparams.timer >= STARTMIN) && (irparams.timer <= STARTMAX)) {
           nextstate(STARTL) ;  // time OK, now look for start SPACE
           irparams.timer = 0 ;
-        PORTB ^= redMask; delay_ten_us(2); PORTB ^= redMask;
         } else {
           nextstate(IDLE) ;  // bad MARK time, go back to IDLE
         }
@@ -316,7 +307,7 @@ ISR(TIMER0_OVF_vect) {
         }
         else
           nextstate(IDLE) ;  // bad start SPACE time, go back to IDLE
-          PORTB ^= bluMask; delay_ten_us(100); PORTB ^= bluMask;
+
       }
       else {   // still SPACE
         irparams.timer++ ;    // increment time
@@ -396,6 +387,7 @@ ISR(TIMER0_OVF_vect) {
 
 }
 
+/*
 void flash_ircode(long data) {
 
     for (int i=0; i<32; i++) {
@@ -416,6 +408,7 @@ void flash_ircode(long data) {
     }
 
 }
+*/
 
 int main(void) {
 
@@ -426,8 +419,8 @@ int main(void) {
     GTCCR = 0;
 
     DDRB =  (rgbMask) | ( irOutMask );
- 
-    // all PORTB output pins High (all LEDs off), except for the 
+
+    // all PORTB output pins High (all LEDs off), except for the
     // IR LED, which is SOURCE not SINK
     PORTB = ( 0xFF & ~irOutMask );
                     // -- (if we set an input pin High it activates a
@@ -439,12 +432,9 @@ int main(void) {
     enableIRIn();
     sei();                // enable microcontroller interrupts
 
-    int my_code      = 0b10010010;
-    int my_code_rev  = 0b01101101;
-    long payload     = 0b01100110;
-    long payload_rev = 0b10011001;
 
     char colour[] = { 0, 0, 0 };
+    long my_code      = MY_ID;   // ID, plus blank colour
 
     while (1==1) {
 
@@ -452,47 +442,64 @@ int main(void) {
         for (int i=0; i<NUM_SENDS; i++) {
            // transmit our identity, without interruption
            sendNEC(my_code, 32);  // takes ~68ms
-           delay_ten_us(3280); // delay for 32ms
+           //delay_ten_us(3280); // delay for 32ms
         }
         enable_ir_recving();
 
         // loop a number of times, to have ~1s of recving/game logic
         for (int i=0; i<730; i++) {
 
-            for (int j=0; j<MAXBUF; i++) {
+            for (int j=0; j<MAXBUF; j++) {
                 if (irparams.irbuf[j]) {
 
-                    flash_ircode(irparams.irbuf[j]);
+
+                    //flash_ircode(irparams.irbuf[j]);
                     if ( irparams.irbuf[j] == APPLE_VOLUME_UP ) {
-                        colour[RED] = 1;
-                    } else if ( irparams.irbuf[j] == APPLE_NEXT_TRACK ) {
-                        colour[GREEN] = 1;
+                        colour[RED] ^= 1;
+                    } else if ( ( irparams.irbuf[j] & ~ID_MASK ) == ( APPLE_NEXT_TRACK & ~ID_MASK ) ) {
+                        colour[GREEN] ^= 1;
                     } else if ( irparams.irbuf[j] == APPLE_VOLUME_DOWN ) {
-                        colour[BLUE] = 1;
+                        colour[BLUE] ^= 1;
                     } else if ( irparams.irbuf[j] == APPLE_PLAY ) {
                         colour[RED] = 1;
                         colour[GREEN] = 1;
                         colour[BLUE] = 1;
+                    } else if ( irparams.irbuf[j] == APPLE_MENU ) {
+                        colour[RED] = 0;
+                        colour[GREEN] = 0;
+                        colour[BLUE] = 0;
+                    } else {
+                        colour[RED] = ( irparams.irbuf[j] & ( 1 << RED ) ) >> RED;
+                        colour[GREEN] = ( irparams.irbuf[j] & ( 1 << GREEN ) ) >> GREEN;
+                        colour[BLUE] = ( irparams.irbuf[j] & ( 1 << BLUE ) ) >> BLUE;
                     }
-
                     irparams.irbuf[j] = 0;
-                    
+
                 }
-            } 
+            }
+
+            if ( colour[RED] ) {
+                PORTB &= ~redMask;
+            } else {
+                PORTB |= redMask;
+            }
+            if ( colour[GREEN] ) {
+                PORTB &= ~grnMask;
+            } else {
+                PORTB |= grnMask;
+            }
+            if ( colour[BLUE] ) {
+                PORTB &= ~bluMask;
+            } else {
+                PORTB |= bluMask;
+            }
 
             delay_ten_us(100);
 
         }
 
-        if ( colour[RED] ) {
-            PORTB &= ~redMask;
-        }
-        if ( colour[GREEN] ) {
-            PORTB &= ~grnMask;
-        }
-        if ( colour[BLUE] ) {
-            PORTB &= ~bluMask;
-        }
+
+        my_code = MY_ID | colour[RED] << RED | colour[GREEN] << GREEN | colour[BLUE] << BLUE;
 
 
     }
