@@ -111,6 +111,8 @@
 #define BITMARK  8
 #define RPTMARK  9
 
+#define IRBUF_CUR irparams.irbuf[j]
+
 // macros
 #define nextstate(X) (irparams.rcvstate = X)
 
@@ -450,21 +452,20 @@ int main(void) {
         for (int i=0; i<730; i++) {
 
             for (int j=0; j<MAXBUF; j++) {
-                if (irparams.irbuf[j]) {
-
+                if (IRBUF_CUR) {
 
                     //flash_ircode(irparams.irbuf[j]);
-                    if ( irparams.irbuf[j] == APPLE_VOLUME_UP ) {
+                    if ( IRBUF_CUR & ~ID_MASK == APPLE_VOLUME_UP ) {
                         colour[RED] ^= 1;
-                    } else if ( ( irparams.irbuf[j] & ~ID_MASK ) == ( APPLE_NEXT_TRACK & ~ID_MASK ) ) {
+                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_NEXT_TRACK ) {
                         colour[GREEN] ^= 1;
-                    } else if ( irparams.irbuf[j] == APPLE_VOLUME_DOWN ) {
+                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_VOLUME_DOWN ) {
                         colour[BLUE] ^= 1;
-                    } else if ( irparams.irbuf[j] == APPLE_PLAY ) {
+                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_PLAY ) {
                         colour[RED] = 1;
                         colour[GREEN] = 1;
                         colour[BLUE] = 1;
-                    } else if ( irparams.irbuf[j] == APPLE_MENU ) {
+                    } else if ( IRBUF_CUR & ~ID_MASK == APPLE_MENU ) {
                         colour[RED] = 0;
                         colour[GREEN] = 0;
                         colour[BLUE] = 0;
