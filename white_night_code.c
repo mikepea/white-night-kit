@@ -15,7 +15,15 @@
 
 // Apple codes
 #define APPLE_PLAY 0x77E1203A
+#define APPLE_VOLUME_UP         0x77E1D03A
+#define APPLE_VOLUME_DOWN       0x77E1B03A
+#define APPLE_NEXT_TRACK        0x77E1E03A
+#define APPLE_PREV_TRACK        0x77E1103A
+#define APPLE_MENU              0x77E1403A
+
+// delay for flashing out the recd code
 #define IR_DATA_PRINT_DELAY 25000
+
 
 // for matt's design
 #define bogusMask    0b00100000
@@ -27,6 +35,10 @@
 #define irOutMask    0b00010000
 // 4 = PB3
 #define irInPortBPin  4
+
+#define RED 0
+#define GREEN 1
+#define BLUE 2
 
 // how many times to send our IR code in each 1s loop.
 #define NUM_SENDS 1
@@ -384,6 +396,26 @@ ISR(TIMER0_OVF_vect) {
 
 }
 
+void flash_ircode(long data) {
+
+    for (int i=0; i<32; i++) {
+        if ( data & 1 ) {
+            PORTB |= rgbMask; // turns off RGB
+            PORTB ^= redMask; // turns on red
+            delay_ten_us(IR_DATA_PRINT_DELAY);
+            PORTB |= rgbMask; // turns off RGB
+            delay_ten_us(IR_DATA_PRINT_DELAY);
+        } else {
+            PORTB |= rgbMask; // turns off RGB
+            PORTB ^= bluMask; // turns on red
+            delay_ten_us(IR_DATA_PRINT_DELAY);
+            PORTB |= bluMask; // turns off RGB
+            delay_ten_us(IR_DATA_PRINT_DELAY);
+        }
+        data >>= 1;
+    }
+
+}
 
 int main(void) {
 
@@ -407,7 +439,12 @@ int main(void) {
     enableIRIn();
     sei();                // enable microcontroller interrupts
 
-    long my_code = 0x77E1D03A; // apple macbook remote, send volume up
+    int my_code      = 0b10010010;
+    int my_code_rev  = 0b01101101;
+    long payload     = 0b01100110;
+    long payload_rev = 0b10011001;
+
+    char colour[] = { 0, 0, 0 };
 
     while (1==1) {
 
@@ -422,40 +459,41 @@ int main(void) {
         // loop a number of times, to have ~1s of recving/game logic
         for (int i=0; i<730; i++) {
 
-            //if ( my_results.decode_type == NEC ) {
-            if ( irparams.irbuf[0] ) {
-                //if ( ( my_results.value & 0x00ffffff ) == APPLE_PLAY ) {
-                long data = irparams.irbuf[0];
-                startUp1();
+            for (int j=0; j<MAXBUF; i++) {
+                if (irparams.irbuf[j]) {
 
-                //if ( my_results.value != 0xffffffff ) {
-
-                    /*
-                    for (int i=0; i<32; i++) {
-                        if ( data & 1 ) {
-                            PORTB |= rgbMask; // turns off RGB
-                            PORTB ^= redMask; // turns on red
-                            delay_ten_us(IR_DATA_PRINT_DELAY);
-                            PORTB |= rgbMask; // turns off RGB
-                            delay_ten_us(IR_DATA_PRINT_DELAY);
-                        } else {
-                            PORTB |= rgbMask; // turns off RGB
-                            PORTB ^= bluMask; // turns on red
-                            delay_ten_us(IR_DATA_PRINT_DELAY);
-                            PORTB |= bluMask; // turns off RGB
-                            delay_ten_us(IR_DATA_PRINT_DELAY);
-                        }
-                        data >>= 1;
+                    flash_ircode(irparams.irbuf[j]);
+                    if ( irparams.irbuf[j] == APPLE_VOLUME_UP ) {
+                        colour[RED] = 1;
+                    } else if ( irparams.irbuf[j] == APPLE_NEXT_TRACK ) {
+                        colour[GREEN] = 1;
+                    } else if ( irparams.irbuf[j] == APPLE_VOLUME_DOWN ) {
+                        colour[BLUE] = 1;
+                    } else if ( irparams.irbuf[j] == APPLE_PLAY ) {
+                        colour[RED] = 1;
+                        colour[GREEN] = 1;
+                        colour[BLUE] = 1;
                     }
-                    */
 
-                //}
-                irparams.irbuf[0] = 0;
-            }
+                    irparams.irbuf[j] = 0;
+                    
+                }
+            } 
 
             delay_ten_us(100);
 
         }
+
+        if ( colour[RED] ) {
+            PORTB &= ~redMask;
+        }
+        if ( colour[GREEN] ) {
+            PORTB &= ~grnMask;
+        }
+        if ( colour[BLUE] ) {
+            PORTB &= ~bluMask;
+        }
+
 
     }
     return 0;
