@@ -143,9 +143,9 @@ static volatile struct {
   unsigned long irbuf[MAXBUF] ;    // circular buffer for IR codes
 } irparams ;
 
-void delay_ten_us(unsigned long int us) {
-  unsigned long int count;
-  const unsigned long int DelayCount=8;
+void delay_ten_us(unsigned int us) {
+  unsigned int count;
+  const unsigned int DelayCount=8;
 
   while (us != 0) {
     for (count=0; count <= DelayCount; count++) {
