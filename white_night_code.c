@@ -130,6 +130,10 @@
 
 #define MAXBUF 8       // IR command code buffer length (circular buffer)
 
+// for RGB PWM in interrupt
+volatile unsigned char rgb_tick = 0;
+char colour[] = { 0, 0, 0 };
+
 // state machine variables irparams
 static volatile struct {
   char rcvstate ;          // IR receiver state
@@ -268,6 +272,31 @@ ISR(TIMER0_OVF_vect) {
 ISR(TIMER0_OVF_vect) {
 
   RESET_TIMER0;
+
+    // process RGB software PWM
+    // 
+    rgb_tick = (rgb_tick + 1) % 4;  // rgb_tick keeps track of which
+                                    // rgb element we need to process.
+    if (colour[RED] > rgb_tick) {   // Update the red value based on
+        PORTB &= ~redMask;          // the value stored on colour[].
+    }
+    else {
+        PORTB |= redMask;
+    }
+
+    if (colour[GREEN] > rgb_tick) { // Update the green value based on
+        PORTB &= ~grnMask;          // the value stored on colour[].
+    }
+    else {
+        PORTB |= grnMask;
+    }
+
+    if (colour[BLUE] > rgb_tick) {  // Update the blue value based on
+        PORTB &= ~bluMask;          // the value stored on colour[].
+    }
+    else {
+        PORTB |= bluMask;
+    }
 
   irparams.irdata = (PINB & irInMask) >> (irInPortBPin - 1);
 
@@ -435,7 +464,6 @@ int main(void) {
     sei();                // enable microcontroller interrupts
 
 
-    char colour[] = { 0, 0, 0 };
     long my_code      = MY_ID;   // ID, plus blank colour
 
     while (1==1) {
@@ -456,43 +484,27 @@ int main(void) {
 
                     //flash_ircode(irparams.irbuf[j]);
                     if ( IRBUF_CUR <<8 == APPLE_VOLUME_UP <<8 ) {
-                        colour[RED] ^= 1;
+                        colour[RED] = ( colour[RED] + 1 ) % 4;
                     } else if ( IRBUF_CUR <<8 == APPLE_NEXT_TRACK <<8) {
-                        colour[GREEN] ^= 1;
+                        colour[GREEN] = ( colour[GREEN] + 1 ) % 4;
                     } else if ( IRBUF_CUR <<8 == APPLE_VOLUME_DOWN <<8) {
-                        colour[BLUE] ^= 0;
+                        colour[BLUE] = ( colour[BLUE] + 1 ) % 4;
                     } else if ( IRBUF_CUR <<8 == APPLE_PLAY <<8) {
-                        colour[RED] = 1;
-                        colour[GREEN] = 1;
-                        colour[BLUE] = 1;
+                        colour[RED] = 3;
+                        colour[GREEN] = 3;
+                        colour[BLUE] = 3;
                     } else if ( IRBUF_CUR <<8 == APPLE_MENU <<8) {
                         colour[RED] = 0;
                         colour[GREEN] = 0;
                         colour[BLUE] = 0;
                     } else {
-                        colour[RED] =   ( IRBUF_CUR & ( 1 << RED ) ) >> RED;
-                        colour[GREEN] = ( IRBUF_CUR & ( 1 << GREEN ) ) >> GREEN;
-                        colour[BLUE] =  ( IRBUF_CUR & ( 1 << BLUE ) ) >> BLUE;
+                        colour[RED] =   ( IRBUF_CUR & ( 1 << RED*2 ) ) >> RED*2;
+                        colour[GREEN] = ( IRBUF_CUR & ( 1 << GREEN*2 ) ) >> GREEN*2;
+                        colour[BLUE] =  ( IRBUF_CUR & ( 1 << BLUE*2 ) ) >> BLUE*2;
                     }
                     irparams.irbuf[j] = 0;
 
                 }
-            }
-
-            if ( colour[RED] ) {
-                PORTB &= ~redMask;
-            } else {
-                PORTB |= redMask;
-            }
-            if ( colour[GREEN] ) {
-                PORTB &= ~grnMask;
-            } else {
-                PORTB |= grnMask;
-            }
-            if ( colour[BLUE] ) {
-                PORTB &= ~bluMask;
-            } else {
-                PORTB |= bluMask;
             }
 
             delay_ten_us(100);
@@ -500,7 +512,7 @@ int main(void) {
         }
 
 
-        my_code = MY_ID | colour[RED] << RED | colour[GREEN] << GREEN | colour[BLUE] << BLUE;
+        my_code = MY_ID | colour[RED] << RED*2 | colour[GREEN] << GREEN*2 | colour[BLUE] << BLUE*2;
 
 
     }
