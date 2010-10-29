@@ -28,6 +28,7 @@
 // delay for flashing out the recd code
 #define IR_DATA_PRINT_DELAY 50000
 
+#define MAX_SAME_COLOUR_RECV 5
 
 // for matt's design
 #define bogusMask    0b00100000
@@ -43,6 +44,7 @@
 #define RED 0
 #define GREEN 1
 #define BLUE 2
+#define displayColourMask 0b00111111
 
 // how many times to send our IR code in each 1s loop.
 #define NUM_SENDS 1
@@ -142,7 +144,6 @@ static volatile struct {
   char fptr ;              // irbuf front pointer
   char rptr ;              // irbuf rear pointer
   char irpin ;             // pin for IR data from detector
-  char blinkflag ;         // TRUE to enable blinking of pin 13 on IR processing
   unsigned int timer ;     // state timer
   unsigned long irmask ;   // one-bit mask for constructing IR code
   unsigned long ircode ;   // IR code
@@ -199,8 +200,17 @@ void enableIROut(int khz) {
 
 void sendNEC(unsigned long data, int nbits)
 {
-    PORTB |= rgbMask; // turns off RGB
-    PORTB ^= grnMask; // turns on green
+    // handle turning on an approximation of our colour,
+    // as RGB PWM is off during IR sending.
+    if ( colour[RED] > 1 ) {
+        PORTB &= ~redMask;
+    }
+    if ( colour[GREEN] > 1 ) {
+        PORTB &= ~grnMask;
+    }
+    if ( colour[BLUE] > 1 ) {
+        PORTB &= ~bluMask;
+    }
     enableIROut(38); // put timer into send mode
     mark(NEC_HDR_MARK);
     space(NEC_HDR_SPACE);
@@ -217,7 +227,6 @@ void sendNEC(unsigned long data, int nbits)
     mark(NEC_BIT_MARK);
     space(0);
     enableIRIn(); // switch back to recv mode
-    PORTB |= rgbMask; // turns off RGB
 }
 
 
@@ -249,7 +258,6 @@ void enableIRIn(void) {
   irparams.ircode = 0 ;
   irparams.fptr = 0 ;
   irparams.rptr = 0 ;
-  irparams.blinkflag = 1 ;
 
   // set pin modes
   //pinMode(irparams.recvpin, INPUT);
@@ -465,6 +473,10 @@ int main(void) {
 
 
     long my_code      = MY_ID;   // ID, plus blank colour
+    char same_colour_count = 0;
+    char last_colour = 0;
+    char curr_colour = 0;
+    char next_colour = 0;
 
     while (1==1) {
 
@@ -498,9 +510,37 @@ int main(void) {
                         colour[GREEN] = 0;
                         colour[BLUE] = 0;
                     } else {
-                        colour[RED] =   ( IRBUF_CUR & ( 1 << RED*2 ) ) >> RED*2;
-                        colour[GREEN] = ( IRBUF_CUR & ( 1 << GREEN*2 ) ) >> GREEN*2;
-                        colour[BLUE] =  ( IRBUF_CUR & ( 1 << BLUE*2 ) ) >> BLUE*2;
+                        // take on colour recd
+                        //
+                        next_colour = (IRBUF_CUR & displayColourMask);
+                        if ( next_colour == curr_colour ) {
+                            if ( same_colour_count > MAX_SAME_COLOUR_RECV ) {
+                                // freak out - reset colour to my default
+                                colour[RED] =   ( ( MY_ID >> 24 ) & ( 1 << RED*2 ) ) >> RED*2;
+                                colour[GREEN] = ( ( MY_ID >> 24 ) & ( 1 << GREEN*2 ) ) >> GREEN*2;
+                                colour[BLUE] =  ( ( MY_ID >> 24 ) & ( 1 << BLUE*2 ) ) >> BLUE*2;
+                                //colour[RED] =   (( IRBUF_CUR ^ ( MY_ID >> 24 ) ) & ( 1 << RED*2 ) ) >> RED*2;
+                                //colour[GREEN] = (( IRBUF_CUR ^ ( MY_ID >> 24 ) ) & ( 1 << GREEN*2 ) ) >> GREEN*2;
+                                //colour[BLUE] =  (( IRBUF_CUR ^ ( MY_ID >> 24 ) ) & ( 1 << BLUE*2 ) ) >> BLUE*2;
+                                same_colour_count = 0;
+                            } else {
+                                same_colour_count++;
+                            }
+                        } else {
+                            same_colour_count = 0; // gots a different colour!
+                            colour[RED] =   ( IRBUF_CUR & ( 1 << RED*2 ) ) >> RED*2;
+                            colour[GREEN] = ( IRBUF_CUR & ( 1 << GREEN*2 ) ) >> GREEN*2;
+                            colour[BLUE] =  ( IRBUF_CUR & ( 1 << BLUE*2 ) ) >> BLUE*2;
+                            //break; 
+                            // add colour recd to our current colour, but go back to 0 if too much
+                            // colour recd
+                            //colour[RED]   = (colour[RED] +   ( IRBUF_CUR & ( 1 << RED*2 ) ) >> RED*2 ) % 4;
+                            //colour[GREEN] = (colour[GREEN] + ( IRBUF_CUR & ( 1 << GREEN*2 ) ) >> GREEN*2) % 4;
+                            //colour[BLUE]  = (colour[BLUE] +  ( IRBUF_CUR & ( 1 << BLUE*2 ) ) >> BLUE*2) % 4;
+                        }
+                        last_colour = curr_colour;
+                        curr_colour = colour[RED] << RED*2 | colour[GREEN] << GREEN*2 | colour[BLUE] << BLUE*2;
+                        
                     }
                     irparams.irbuf[j] = 0;
 
@@ -511,9 +551,11 @@ int main(void) {
 
         }
 
-
+        // send out the colour I now am
         my_code = MY_ID | colour[RED] << RED*2 | colour[GREEN] << GREEN*2 | colour[BLUE] << BLUE*2;
 
+        // send out inverted colours
+        //my_code = MY_ID | ( ~( colour[RED] << RED*2 | colour[GREEN] << GREEN*2 | colour[BLUE] << BLUE*2 ) & 0b111111 );
 
     }
     return 0;
