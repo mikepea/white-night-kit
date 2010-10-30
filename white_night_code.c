@@ -20,7 +20,7 @@ uint8_t same_colour_count = 0;
 uint8_t last_colour = 0;
 uint8_t curr_colour = MY_ID & displayRGBMask;
 uint8_t next_colour = 0;
-uint8_t my_mode = INIT_MODE;
+uint8_t my_mode = CYCLE_COLOURS_SEEN;
 uint8_t debug_modes = 0x00;
 
 // counts 'ticks' (kinda-seconds) of main loop
@@ -478,7 +478,7 @@ int main(void) {
         for (int i=0; i<730; i++) {
 
             check_all_ir_buffers_for_data();
-            delay_ten_us(100);
+            delay_ten_us(92 + (MY_ID % 16));  // differ sleep period so devices are less likely to interfere
 
         }
 
