@@ -1,167 +1,44 @@
 /*
  * white_night_code
  *
- * Copyright 2011 BuildBrighton (Mike Pountney, Matthew Edwards)
+ * Copyright 2010 BuildBrighton (Mike Pountney, Matthew Edwards)
  * For details, see http://github.com/mikepea/white-night-code
  *
  * Interrupt code based on NECIRrcv by Joe Knapp, IRremote by Ken Shirriff
  *    http://www.arduino.cc/cgi-bin/yabb2/YaBB.pl?num=1210243556
  */
 
-#define MY_ID   0x01000000
-#define ID_MASK 0xff000000
 
+#include "my_id.h"
+#include "white_night_code.h"
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <avr/sleep.h>
-#include <avr/pgmspace.h>
+#include <avr/eeprom.h>
 
-// Apple codes (device id is first byte, mine is 5c)
-#define APPLE_PLAY              0x000487ee
-#define APPLE_VOLUME_UP         0x000b87ee
-#define APPLE_VOLUME_DOWN       0x000d87ee
-#define APPLE_NEXT_TRACK        0x000787ee
-#define APPLE_PREV_TRACK        0x000887ee
-#define APPLE_MENU              0x000287ee
+uint8_t same_colour_count = 0;
+uint8_t last_colour = 0;
+uint8_t curr_colour = MY_ID & displayRGBMask;
+uint8_t next_colour = 0;
+uint8_t my_mode = INIT_MODE;
+uint8_t debug_modes = 0x00;
 
-// delay for flashing out the recd code
-#define IR_DATA_PRINT_DELAY 50000
+// counts 'ticks' (kinda-seconds) of main loop
+int     main_loop_counter = 0;
 
-#define MAX_SAME_COLOUR_RECV 5
-
-// for matt's design
-#define bogusMask    0b00100000
-#define redMask      0b00000100
-#define grnMask      0b00000010
-#define bluMask      0b00000001
-#define rgbMask      0b00000111
-#define irInMask     0b00001000
-#define irOutMask    0b00010000
-// 4 = PB3
-#define irInPortBPin  4
-
-#define RED 0
-#define GREEN 1
-#define BLUE 2
-#define displayColourMask 0b00111111
-
-// how many times to send our IR code in each 1s loop.
-#define NUM_SENDS 1
-
-#define CLKFUDGE 5        // fudge factor for clock interrupt overhead
-#define CLK 256           // max value for clock (timer 0)
-#define PRESCALE 8        // timer0 clock prescale
-#define SYSCLOCK 8000000  // main clock speed
-#define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
-#define USECPERTICK 50  // microseconds per clock interrupt tick
-
-#define INIT_TIMER_COUNT0 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
-#define RESET_TIMER0 TCNT0 = INIT_TIMER_COUNT0
-
-// IR detector output is active low
-#define MARK  0
-#define SPACE 1
-
-#define NBITS 32         // bits in IR code
-
-#define TOPBIT 0x80000000
-
-#define TOLERANCE 25  // percent tolerance in measurements
-#define LTOL (1.0 - TOLERANCE/100.)
-#define UTOL (1.0 + TOLERANCE/100.)
-
-#define STARTNOM      9000
-#define SPACENOM      4500
-#define BITMARKNOM    620
-#define ONESPACENOM   1600
-#define ZEROSPACENOM  480
-#define RPTSPACENOM   2180
-
-#define NEC_HDR_MARK    9000
-#define NEC_HDR_SPACE   4500
-#define NEC_BIT_MARK    560
-#define NEC_ONE_SPACE   1600
-#define NEC_ZERO_SPACE  560
-#define NEC_RPT_SPACE   2250
-
-#define TICKS_LOW(us) (int) (((us)*LTOL/USECPERTICK))
-#define TICKS_HIGH(us) (int) (((us)*UTOL/USECPERTICK + 1))
-
-// pulse parameters (tick counts)
-#define STARTMIN (int)((STARTNOM/USECPERTICK)*LTOL) // start MARK
-#define STARTMAX (int)((STARTNOM/USECPERTICK)*UTOL)
-#define SPACEMIN (int)((SPACENOM/USECPERTICK)*LTOL)
-#define SPACEMAX (int)((SPACENOM/USECPERTICK)*UTOL)
-#define BITMARKMIN (int)((BITMARKNOM/USECPERTICK)*LTOL-2) // extra tolerance for low counts
-#define BITMARKMAX (int)((BITMARKNOM/USECPERTICK)*UTOL+2)
-#define ONESPACEMIN (int)((ONESPACENOM/USECPERTICK)*LTOL)
-#define ONESPACEMAX (int)((ONESPACENOM/USECPERTICK)*UTOL)
-#define ZEROSPACEMIN (int)((ZEROSPACENOM/USECPERTICK)*LTOL-2)
-#define ZEROSPACEMAX (int)((ZEROSPACENOM/USECPERTICK)*UTOL+2)
-#define RPTSPACEMIN (int)((RPTSPACENOM/USECPERTICK)*LTOL)
-#define RPTSPACEMAX (int)((RPTSPACENOM/USECPERTICK)*UTOL)
-
-// receiver states
-#define IDLE     1
-#define STARTH   2
-#define STARTL   3
-#define BIT      4
-#define ONE      5
-#define ZERO     6
-#define STOP     7
-#define BITMARK  8
-#define RPTMARK  9
-
-#define IRBUF_CUR irparams.irbuf[j]
-
-// macros
-#define nextstate(X) (irparams.rcvstate = X)
-
-// repeat code for NEC
-#define REPEAT 0xffffffff
-
-// Values for decode_type
-#define NONE 0
-#define NEC 1
-
-
-
-#define _GAP 5000 // Minimum gap between transmissions
-#define GAP_TICKS (_GAP/USECPERTICK)
-
-#define MAXBUF 8       // IR command code buffer length (circular buffer)
-
-// for RGB PWM in interrupt
-volatile unsigned char rgb_tick = 0;
-char colour[] = { 0, 0, 0 };
-
-// state machine variables irparams
-static volatile struct {
-  char rcvstate ;          // IR receiver state
-  char bitcounter ;        // bit counter
-  char irdata ;            // MARK or SPACE read from IR input pin
-  char fptr ;              // irbuf front pointer
-  char rptr ;              // irbuf rear pointer
-  char irpin ;             // pin for IR data from detector
-  unsigned int timer ;     // state timer
-  unsigned long irmask ;   // one-bit mask for constructing IR code
-  unsigned long ircode ;   // IR code
-  unsigned long irbuf[MAXBUF] ;    // circular buffer for IR codes
-} irparams ;
+uint8_t bit_by_zombie_count = 0;
+int     time_infected = 0;
 
 void delay_ten_us(unsigned int us) {
   unsigned int count;
-  const unsigned int DelayCount=8;
 
   while (us != 0) {
-    for (count=0; count <= DelayCount; count++) {
+    for (count=0; count <= 8; count++) {
             PINB |= bogusMask;
     }
     us--;
   }
 }
-
 
 void enable_ir_recving(void) {
   //Timer0 Overflow Interrupt Enable
@@ -189,7 +66,7 @@ void space(int time) {
 }
 
 
-void enableIROut(int khz) {
+void enableIROut(void) {
 
   TCCR1 = _BV(CS10);  // turn on clock, prescale = 1
   GTCCR = _BV(PWM1B) | _BV(COM1B0);  // toggle OC1B on compare match; PWM mode on OCR1C/B.
@@ -198,23 +75,16 @@ void enableIROut(int khz) {
 
 }
 
-void sendNEC(unsigned long data, int nbits)
+void sendNEC(unsigned long data)
 {
     // handle turning on an approximation of our colour,
     // as RGB PWM is off during IR sending.
-    if ( colour[RED] > 1 ) {
-        PORTB &= ~redMask;
-    }
-    if ( colour[GREEN] > 1 ) {
-        PORTB &= ~grnMask;
-    }
-    if ( colour[BLUE] > 1 ) {
-        PORTB &= ~bluMask;
-    }
-    enableIROut(38); // put timer into send mode
+    // TODO
+
+    enableIROut(); // put timer into send mode
     mark(NEC_HDR_MARK);
     space(NEC_HDR_SPACE);
-    for (int i = 0; i < nbits; i++) {
+    for (uint8_t i = 0; i < 32; i++) {
         if (data & 1) {
             mark(NEC_BIT_MARK);
             space(NEC_ONE_SPACE);
@@ -263,7 +133,6 @@ void enableIRIn(void) {
   //pinMode(irparams.recvpin, INPUT);
 }
 
-
 /*
 ISR(TIMER0_OVF_vect) {
   RESET_TIMER0;
@@ -281,30 +150,33 @@ ISR(TIMER0_OVF_vect) {
 
   RESET_TIMER0;
 
+  rgb_tick = (rgb_tick + 1) % 4;  // rgb_tick keeps track of which
+
+  //if ( debug_modes & DEBUG_TURN_OFF_DISPLAY == 0 ) {
     // process RGB software PWM
     // 
-    rgb_tick = (rgb_tick + 1) % 4;  // rgb_tick keeps track of which
                                     // rgb element we need to process.
-    if (colour[RED] > rgb_tick) {   // Update the red value based on
-        PORTB &= ~redMask;          // the value stored on colour[].
-    }
-    else {
+    if ((curr_colour & displayRedMask >> RED*2) > rgb_tick) {   
+        // Update the red value
+        PORTB &= ~redMask; // turn on
+    } else {
         PORTB |= redMask;
     }
 
-    if (colour[GREEN] > rgb_tick) { // Update the green value based on
-        PORTB &= ~grnMask;          // the value stored on colour[].
+    if ((curr_colour & displayGrnMask >> GREEN*2) > rgb_tick) {
+        PORTB &= ~grnMask; // turn on
     }
     else {
         PORTB |= grnMask;
     }
 
-    if (colour[BLUE] > rgb_tick) {  // Update the blue value based on
-        PORTB &= ~bluMask;          // the value stored on colour[].
+    if ((curr_colour & displayBluMask >> BLUE*2) > rgb_tick) {
+        PORTB &= ~bluMask; // turn on
     }
     else {
         PORTB |= bluMask;
     }
+  //}
 
   irparams.irdata = (PINB & irInMask) >> (irInPortBPin - 1);
 
@@ -340,7 +212,8 @@ ISR(TIMER0_OVF_vect) {
           irparams.irmask = (unsigned long)0x1 ;
           irparams.ircode = 0 ;
         }
-        else if ((irparams.timer >= RPTSPACEMIN) && (irparams.timer <= RPTSPACEMAX)) {  // not a start SPACE, maybe this is a repeat signal
+        else if ((irparams.timer >= RPTSPACEMIN) && (irparams.timer <= RPTSPACEMAX)) {  
+          // not a start SPACE, maybe this is a repeat signal
           nextstate(RPTMARK) ;   // yep, it's a repeat signal
           irparams.timer = 0 ;
         }
@@ -449,6 +322,115 @@ void flash_ircode(long data) {
 }
 */
 
+void check_all_ir_buffers_for_data(void) {
+
+    for (uint8_t j=0; j<MAXBUF; j++) {
+
+        if (IRBUF_CUR) {
+
+            //flash_ircode(irparams.irbuf[j]);
+            //if ( ( IRBUF_CUR & ~COMMON_CODE_MASK ) == APPLE_VOLUME_UP ) {
+            //    curr_colour = displayGrnMask;
+
+            //} else if ( ( IRBUF_CUR & ~COMMON_CODE_MASK ) == APPLE_NEXT_TRACK ) {
+            //    curr_colour = displayBluMask;
+            
+            //} else if ( ( IRBUF_CUR & ~COMMON_CODE_MASK ) == APPLE_PREV_TRACK ) {
+            //    curr_colour = displayRedMask;
+
+            if ( ( IRBUF_CUR & ~COMMON_CODE_MASK ) == APPLE_VOLUME_DOWN ) {
+                // turn'em off, n sync-ish em up.
+                my_mode = CYCLE_COLOURS_SEEN;
+                curr_colour = 0;
+
+            } else if ( ( IRBUF_CUR & ~COMMON_CODE_MASK ) == APPLE_PLAY ) {
+                // de-zombie folk
+                my_mode = CYCLE_COLOURS_SEEN;
+
+            } else if ( ( IRBUF_CUR & ~COMMON_CODE_MASK ) == APPLE_MENU ) {
+                // go into data transfer mode - IR all known info to a receiving station
+                my_mode = SEND_ALL_EEPROM;
+
+            } else if ( (IRBUF_CUR & COMMON_CODE_MASK) == (long)(OUR_COMMON_CODE)<<24) {
+
+                // recving from a known badge
+                
+                // who is it?
+                //
+                uint8_t recd_id = (IRBUF_CUR & ID_MASK) >> 16;
+
+                // have we seen them before?
+                // if not, record that we have
+                if ( eeprom_read_byte((uint8_t*)recd_id) == 0 ) {
+                    eeprom_write_byte((uint8_t*)recd_id, 1);
+                }
+
+                // what mode are they in?
+                uint8_t recd_mode = (IRBUF_CUR & ID_MASK) >> 8;
+
+                // what data did they send me?
+                //uint8_t recd_data = (IRBUF_CUR & DATA_MASK);
+
+                if (recd_mode == AM_ZOMBIE) {
+                    // eek
+                    if ( bit_by_zombie_count > BITTEN_MAX ) {
+                        my_mode = AM_INFECTED;
+                        bit_by_zombie_count = 0;
+                        time_infected = main_loop_counter;
+                    } else {
+                        bit_by_zombie_count++;
+                    }
+                    break; // only get bitten by one zombie in a pack 
+
+                } else if (recd_mode == SEND_ALL_EEPROM) {
+                    continue; // ignore them
+
+                } else if (recd_mode == CYCLE_COLOURS_SEEN) {
+                    if ( my_mode == AM_INFECTED ) {
+                        // phew, found someone to fix me.
+                        my_mode == CYCLE_COLOURS_SEEN;
+                    }
+           
+                } 
+
+            }
+            IRBUF_CUR = 0; // processed this code, delete it.
+
+        }
+    }
+
+}
+
+void update_my_state(void) {
+
+    if ( my_mode == AM_INFECTED ) {
+        // yikes. 
+        curr_colour = ( main_loop_counter % 2 ) ? 0 : displayGrnMask;
+        if ( (main_loop_counter - time_infected) > MAX_TIME_INFECTED ) {
+            // you die
+            my_mode = AM_ZOMBIE;
+        }
+
+    } else if ( my_mode == AM_ZOMBIE ) {
+        // hnnnngggg... brains...
+        //
+        curr_colour = ( main_loop_counter % 3 ) ? 0 : displayRedMask;
+
+    } else if ( my_mode == CYCLE_COLOURS_SEEN ) {
+        // read next valid id from EEPROM
+        for ( uint8_t i = curr_colour + 1; i<128; i++ ) {
+            uint8_t seen = eeprom_read_byte((uint8_t*)i);
+            if ( seen ) {
+                last_colour = curr_colour;
+                curr_colour = seen & displayRGBMask; // in case ID is >= 64
+                break;
+            }
+        }
+
+    } 
+
+}
+
 int main(void) {
 
     // zero our timer controls, for now
@@ -465,25 +447,29 @@ int main(void) {
                     // -- (if we set an input pin High it activates a
                     // pull-up resistor, which we don't need, but don't care about either)
 
-    // pretty boot light sequence.
-    //startUp1();
-
     enableIRIn();
     sei();                // enable microcontroller interrupts
 
+    long my_code = 0;
 
-    long my_code      = MY_ID;   // ID, plus blank colour
-    char same_colour_count = 0;
-    char last_colour = 0;
-    char curr_colour = 0;
-    char next_colour = 0;
+    while (1) {
 
-    while (1==1) {
+        // set code to whatever we want to send
+        my_code  = MY_CODE_HEADER | (long)(my_mode) <<8 | curr_colour;   // ID, plus blank colour
 
         disable_ir_recving();
-        for (int i=0; i<NUM_SENDS; i++) {
+        if ( my_mode == SEND_ALL_EEPROM ) {
+            for ( uint8_t i = 0; i < 128; i++ ) {
+                uint8_t has_seen = eeprom_read_byte((uint8_t*)i);
+                if ( has_seen ) {
+                    sendNEC( MY_CODE_HEADER | (long)(SEND_ALL_EEPROM)<<8 | has_seen);
+                    //delay_ten_us(10000);
+                }
+            }
+        }
+        for (uint8_t i=0; i<NUM_SENDS; i++) {
            // transmit our identity, without interruption
-           sendNEC(my_code, 32);  // takes ~68ms
+           sendNEC(my_code);  // takes ~68ms
            //delay_ten_us(3280); // delay for 32ms
         }
         enable_ir_recving();
@@ -491,73 +477,16 @@ int main(void) {
         // loop a number of times, to have ~1s of recving/game logic
         for (int i=0; i<730; i++) {
 
-            for (int j=0; j<MAXBUF; j++) {
-                if (IRBUF_CUR) {
-
-                    //flash_ircode(irparams.irbuf[j]);
-                    if ( IRBUF_CUR <<8 == APPLE_VOLUME_UP <<8 ) {
-                        colour[RED] = ( colour[RED] + 1 ) % 4;
-                    } else if ( IRBUF_CUR <<8 == APPLE_NEXT_TRACK <<8) {
-                        colour[GREEN] = ( colour[GREEN] + 1 ) % 4;
-                    } else if ( IRBUF_CUR <<8 == APPLE_VOLUME_DOWN <<8) {
-                        colour[BLUE] = ( colour[BLUE] + 1 ) % 4;
-                    } else if ( IRBUF_CUR <<8 == APPLE_PLAY <<8) {
-                        colour[RED] = 3;
-                        colour[GREEN] = 3;
-                        colour[BLUE] = 3;
-                    } else if ( IRBUF_CUR <<8 == APPLE_MENU <<8) {
-                        colour[RED] = 0;
-                        colour[GREEN] = 0;
-                        colour[BLUE] = 0;
-                    } else {
-                        // take on colour recd
-                        //
-                        next_colour = (IRBUF_CUR & displayColourMask);
-                        if ( next_colour == curr_colour ) {
-                            if ( same_colour_count > MAX_SAME_COLOUR_RECV ) {
-                                // freak out - reset colour to my default
-                                colour[RED] =   ( ( MY_ID >> 24 ) & ( 1 << RED*2 ) ) >> RED*2;
-                                colour[GREEN] = ( ( MY_ID >> 24 ) & ( 1 << GREEN*2 ) ) >> GREEN*2;
-                                colour[BLUE] =  ( ( MY_ID >> 24 ) & ( 1 << BLUE*2 ) ) >> BLUE*2;
-                                //colour[RED] =   (( IRBUF_CUR ^ ( MY_ID >> 24 ) ) & ( 1 << RED*2 ) ) >> RED*2;
-                                //colour[GREEN] = (( IRBUF_CUR ^ ( MY_ID >> 24 ) ) & ( 1 << GREEN*2 ) ) >> GREEN*2;
-                                //colour[BLUE] =  (( IRBUF_CUR ^ ( MY_ID >> 24 ) ) & ( 1 << BLUE*2 ) ) >> BLUE*2;
-                                same_colour_count = 0;
-                            } else {
-                                same_colour_count++;
-                            }
-                        } else {
-                            same_colour_count = 0; // gots a different colour!
-                            colour[RED] =   ( IRBUF_CUR & ( 1 << RED*2 ) ) >> RED*2;
-                            colour[GREEN] = ( IRBUF_CUR & ( 1 << GREEN*2 ) ) >> GREEN*2;
-                            colour[BLUE] =  ( IRBUF_CUR & ( 1 << BLUE*2 ) ) >> BLUE*2;
-                            //break; 
-                            // add colour recd to our current colour, but go back to 0 if too much
-                            // colour recd
-                            //colour[RED]   = (colour[RED] +   ( IRBUF_CUR & ( 1 << RED*2 ) ) >> RED*2 ) % 4;
-                            //colour[GREEN] = (colour[GREEN] + ( IRBUF_CUR & ( 1 << GREEN*2 ) ) >> GREEN*2) % 4;
-                            //colour[BLUE]  = (colour[BLUE] +  ( IRBUF_CUR & ( 1 << BLUE*2 ) ) >> BLUE*2) % 4;
-                        }
-                        last_colour = curr_colour;
-                        curr_colour = colour[RED] << RED*2 | colour[GREEN] << GREEN*2 | colour[BLUE] << BLUE*2;
-                        
-                    }
-                    irparams.irbuf[j] = 0;
-
-                }
-            }
-
+            check_all_ir_buffers_for_data();
             delay_ten_us(100);
 
         }
 
-        // send out the colour I now am
-        my_code = MY_ID | colour[RED] << RED*2 | colour[GREEN] << GREEN*2 | colour[BLUE] << BLUE*2;
-
-        // send out inverted colours
-        //my_code = MY_ID | ( ~( colour[RED] << RED*2 | colour[GREEN] << GREEN*2 | colour[BLUE] << BLUE*2 ) & 0b111111 );
+        update_my_state();
+        main_loop_counter++;
 
     }
+
     return 0;
 
 }
